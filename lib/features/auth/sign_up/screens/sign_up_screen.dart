@@ -124,6 +124,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   hintText: 'Password',
                   prefixIcon: Icons.lock_outline,
                   isPassword: true,
+                  keyboardType: TextInputType.visiblePassword,
                   validator: (value) => Validators.password(value),
                 ),
                 if (_errorMessage != null) ...[

@@ -10,6 +10,7 @@ import 'package:ecommerce_app_huma_volve/features/auth/data/services/auth_servic
 import 'package:ecommerce_app_huma_volve/features/auth/data/services/auth_storage.dart';
 import 'package:ecommerce_app_huma_volve/features/auth/login/screens/login_screen.dart';
 import 'package:ecommerce_app_huma_volve/features/auth/session/auth_session.dart';
+import 'package:ecommerce_app_huma_volve/features/auth/sign_up/screens/sign_up_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http_mock_adapter/http_mock_adapter.dart';
@@ -511,6 +512,19 @@ void main() {
       expect(Validators.password('123456'), isNull);
     });
 
+    test('password validation allows all character types', () {
+      // Letters only, alphanumeric, and special characters must all pass
+      // once the minimum length is met (backend requires >= 4 chars;
+      // the app enforces >= 6).
+      expect(Validators.password('abcdef'), isNull);
+      expect(Validators.password('abc123'), isNull);
+      expect(Validators.password('P@ssw0rd!'), isNull);
+      expect(Validators.password('!@#\$%^&*()'), isNull);
+      expect(Validators.password('pässwörd123!'), isNull);
+      // Too short, even with special characters.
+      expect(Validators.password('a!1'), isNotNull);
+    });
+
     test('full name validation', () {
       expect(Validators.fullName(null), isNotNull);
       expect(Validators.fullName(''), isNotNull);
@@ -625,6 +639,74 @@ void main() {
 
       expect(find.text('Please enter your email'), findsOneWidget);
       expect(find.text('Please enter your password'), findsOneWidget);
+    });
+
+    testWidgets('password fields use a full text keyboard and stay masked', (
+      tester,
+    ) async {
+      final dio = Dio(BaseOptions(baseUrl: ApiConstants.baseApiUrl));
+      DioAdapter(dio: dio, matcher: const UrlRequestMatcher());
+      AuthSession.debugSetInstance(
+        AuthSession(
+          authService: AuthService(dio: dio),
+          storage: InMemoryAuthStorage(),
+        ),
+      );
+
+      for (final screen in [const LoginScreen(), const SignUpScreen()]) {
+        await tester.pumpWidget(MaterialApp(home: screen));
+        final passwordFormField = find.widgetWithText(
+          TextFormField,
+          'Password',
+        );
+        final field = tester.widget<TextField>(
+          find.descendant(
+            of: passwordFormField,
+            matching: find.byType(TextField),
+          ),
+        );
+        // Full text keyboard: letters, numbers, and special characters.
+        expect(field.keyboardType, TextInputType.visiblePassword);
+        // Masking preserved.
+        expect(field.obscureText, isTrue);
+        // No digits-only formatters or character restrictions.
+        expect(field.inputFormatters, isNull);
+      }
+    });
+
+    testWidgets('sign up accepts a special-character password', (tester) async {
+      final dio = Dio(BaseOptions(baseUrl: ApiConstants.baseApiUrl));
+      DioAdapter(dio: dio, matcher: const UrlRequestMatcher()).onPost(
+        ApiConstants.users,
+        (server) => server.reply(201, _testUserJson),
+      );
+      AuthSession.debugSetInstance(
+        AuthSession(
+          authService: AuthService(dio: dio),
+          storage: InMemoryAuthStorage(),
+        ),
+      );
+
+      await tester.pumpWidget(const MaterialApp(home: SignUpScreen()));
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Full Name'),
+        'Jane Doe',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Email Address'),
+        'jane@example.com',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Password'),
+        'P@ssw0rd!',
+      );
+      await tester.ensureVisible(find.text('Sign Up'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Sign Up'));
+      await tester.pumpAndSettle();
+
+      // Successful registration navigates to the Login screen.
+      expect(find.text('Welcome Back!'), findsOneWidget);
     });
   });
 }

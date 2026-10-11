@@ -50,7 +50,12 @@ class _CustomTextFieldState extends State<CustomTextField> {
         controller: widget.controller,
         obscureText: _obscureText,
         validator: widget.validator,
-        keyboardType: widget.keyboardType,
+        // Password fields must offer a full text keyboard (letters, numbers,
+        // special characters). Falls back to `visiblePassword` unless the
+        // caller passes an explicit keyboard type.
+        keyboardType:
+            widget.keyboardType ??
+            (widget.isPassword ? TextInputType.visiblePassword : null),
         decoration: InputDecoration(
           hintText: widget.hintText,
           hintStyle: TextStyle(color: Colors.grey.shade400),

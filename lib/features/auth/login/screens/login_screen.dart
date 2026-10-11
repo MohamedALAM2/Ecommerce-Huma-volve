@@ -106,6 +106,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   hintText: 'Password',
                   prefixIcon: Icons.lock_outline,
                   isPassword: true,
+                  keyboardType: TextInputType.visiblePassword,
                   validator: (value) => Validators.password(value),
                 ),
                 const SizedBox(height: 16),
