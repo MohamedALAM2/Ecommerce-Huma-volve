@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../../../core/dummy_data.dart';
 import '../../../core/theme.dart';
 
@@ -52,10 +53,7 @@ class CartItemCard extends StatelessWidget {
                 const SizedBox(height: 6),
                 Text(
                   'Size: ${cartItem.selectedSize}',
-                  style: TextStyle(
-                    color: Colors.grey.shade600,
-                    fontSize: 14,
-                  ),
+                  style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -70,7 +68,10 @@ class CartItemCard extends StatelessWidget {
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: AppTheme.background,
                         borderRadius: BorderRadius.circular(12),

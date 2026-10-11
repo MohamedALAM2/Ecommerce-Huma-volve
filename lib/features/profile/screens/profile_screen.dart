@@ -1,14 +1,47 @@
 import 'package:flutter/material.dart';
+
 import '../../../core/dummy_data.dart';
 import '../../../core/theme.dart';
 import '../widgets/profile_menu_item.dart';
 import '../../auth/login/screens/login_screen.dart';
+import '../../auth/session/auth_session.dart';
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
   @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  bool _isLoggingOut = false;
+
+  Future<void> _handleLogout() async {
+    if (_isLoggingOut) return;
+    setState(() => _isLoggingOut = true);
+    await AuthSession.instance.logout();
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            const LoginScreen(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final sessionUser = AuthSession.instance.currentUser;
+    final displayName = sessionUser?.name ?? dummyUser.name;
+    final displayEmail = sessionUser?.email ?? dummyUser.email;
+    final avatarUrl = (sessionUser?.avatar.isNotEmpty ?? false)
+        ? sessionUser!.avatar
+        : dummyUser.profilePictureUrl;
+
     return Scaffold(
       backgroundColor: AppTheme.background,
       body: SafeArea(
@@ -17,10 +50,7 @@ class ProfileScreen extends StatelessWidget {
             const SizedBox(height: 24),
             const Text(
               'Profile',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-              ),
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 32),
             Stack(
@@ -34,7 +64,8 @@ class ProfileScreen extends StatelessWidget {
                   ),
                   child: CircleAvatar(
                     radius: 56,
-                    backgroundImage: NetworkImage(dummyUser.profilePictureUrl),
+                    backgroundImage: NetworkImage(avatarUrl),
+                    onBackgroundImageError: (exception, stackTrace) {},
                   ),
                 ),
                 Container(
@@ -49,19 +80,13 @@ class ProfileScreen extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             Text(
-              dummyUser.name,
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-              ),
+              displayName,
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 4),
             Text(
-              dummyUser.email,
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey.shade600,
-              ),
+              displayEmail,
+              style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
             ),
             const SizedBox(height: 32),
             Expanded(
@@ -96,19 +121,9 @@ class ProfileScreen extends StatelessWidget {
                   const SizedBox(height: 16),
                   ProfileMenuItem(
                     icon: Icons.logout,
-                    title: 'Logout',
+                    title: _isLoggingOut ? 'Logging out...' : 'Logout',
                     isDestructive: true,
-                    onTap: () {
-                      Navigator.pushReplacement(
-                        context,
-                        PageRouteBuilder(
-                          pageBuilder: (context, animation, secondaryAnimation) => const LoginScreen(),
-                          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                            return FadeTransition(opacity: animation, child: child);
-                          },
-                        ),
-                      );
-                    },
+                    onTap: _handleLogout,
                   ),
                 ],
               ),
