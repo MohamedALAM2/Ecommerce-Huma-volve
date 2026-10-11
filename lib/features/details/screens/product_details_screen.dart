@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/dummy_data.dart';
 import '../../../core/theme.dart';
+import '../../../core/widgets/app_network_image.dart';
 import '../widgets/color_selector.dart';
 import '../widgets/size_selector.dart';
 import '../../../core/widgets/primary_button.dart';
@@ -16,14 +17,20 @@ class ProductDetailsScreen extends StatefulWidget {
 }
 
 class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
-  late Color _selectedColor;
-  late String _selectedSize;
+  // Nullable: API products provide no colors/sizes, so the selectors are
+  // hidden for them instead of crashing on `.first`.
+  Color? _selectedColor;
+  String? _selectedSize;
 
   @override
   void initState() {
     super.initState();
-    _selectedColor = widget.product.colors.first;
-    _selectedSize = widget.product.sizes.first;
+    if (widget.product.colors.isNotEmpty) {
+      _selectedColor = widget.product.colors.first;
+    }
+    if (widget.product.sizes.isNotEmpty) {
+      _selectedSize = widget.product.sizes.first;
+    }
   }
 
   @override
@@ -64,9 +71,11 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
             flexibleSpace: FlexibleSpaceBar(
               background: Hero(
                 tag: 'product-${widget.product.id}',
-                child: Image.network(
-                  widget.product.imageUrl,
+                child: AppNetworkImage(
+                  imageUrl: widget.product.imageUrl,
                   fit: BoxFit.cover,
+                  width: double.infinity,
+                  height: double.infinity,
                 ),
               ),
             ),
@@ -115,38 +124,46 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                           ?.copyWith(height: 1.6, fontSize: 16),
                     ),
                     const SizedBox(height: 24),
-                    Text(
-                      'Select Color',
-                      style: Theme.of(context).textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 12),
-                    ColorSelector(
-                      colors: widget.product.colors,
-                      selectedColor: _selectedColor,
-                      onColorSelected: (color) {
-                        setState(() {
-                          _selectedColor = color;
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 24),
-                    Text(
-                      'Select Size',
-                      style: Theme.of(context).textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 12),
-                    SizeSelector(
-                      sizes: widget.product.sizes,
-                      selectedSize: _selectedSize,
-                      onSizeSelected: (size) {
-                        setState(() {
-                          _selectedSize = size;
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 32),
+                    if (widget.product.colors.isNotEmpty &&
+                        _selectedColor != null) ...[
+                      Text(
+                        'Select Color',
+                        style: Theme.of(context).textTheme.titleLarge
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 12),
+                      ColorSelector(
+                        colors: widget.product.colors,
+                        selectedColor: _selectedColor!,
+                        onColorSelected: (color) {
+                          setState(() {
+                            _selectedColor = color;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 24),
+                    ],
+                    if (widget.product.sizes.isNotEmpty &&
+                        _selectedSize != null) ...[
+                      Text(
+                        'Select Size',
+                        style: Theme.of(context).textTheme.titleLarge
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 12),
+                      SizeSelector(
+                        sizes: widget.product.sizes,
+                        selectedSize: _selectedSize!,
+                        onSizeSelected: (size) {
+                          setState(() {
+                            _selectedSize = size;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 32),
+                    ] else ...[
+                      const SizedBox(height: 8),
+                    ],
                     PrimaryButton(
                       text: 'Add to Cart',
                       onPressed: () {

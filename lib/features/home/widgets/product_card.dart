@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 
-import '../../../core/dummy_data.dart';
 import '../../../core/theme.dart';
+import '../../../core/widgets/app_network_image.dart';
 import '../../details/screens/product_details_screen.dart';
+import '../data/models/product_model.dart';
 
 class ProductCard extends StatelessWidget {
-  final Product product;
+  final ProductModel product;
 
   const ProductCard({super.key, required this.product});
 
@@ -18,7 +19,7 @@ class ProductCard extends StatelessWidget {
           PageRouteBuilder(
             transitionDuration: const Duration(milliseconds: 500),
             pageBuilder: (context, animation, secondaryAnimation) =>
-                ProductDetailsScreen(product: product),
+                ProductDetailsScreen(product: product.toProduct()),
             transitionsBuilder:
                 (context, animation, secondaryAnimation, child) {
                   return FadeTransition(opacity: animation, child: child);
@@ -48,15 +49,13 @@ class ProductCard extends StatelessWidget {
                 children: [
                   Hero(
                     tag: 'product-${product.id}',
-                    child: ClipRRect(
+                    child: AppNetworkImage(
+                      imageUrl: product.primaryImage,
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      height: double.infinity,
                       borderRadius: const BorderRadius.vertical(
                         top: Radius.circular(24),
-                      ),
-                      child: Image.network(
-                        product.imageUrl,
-                        fit: BoxFit.cover,
-                        width: double.infinity,
-                        height: double.infinity,
                       ),
                     ),
                   ),
@@ -79,52 +78,57 @@ class ProductCard extends StatelessWidget {
                 ],
               ),
             ),
-            Expanded(
-              flex: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Text(
-                      product.name,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 16,
-                        height: 1.2,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+            // Intrinsic info section: it sizes to its content while the
+            // image above takes the remainder, so long titles can never
+            // overflow the card (the previous fixed flex + Spacer did).
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    product.title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 16,
+                      height: 1.2,
                     ),
-                    const Spacer(),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
                           '\$${product.price.toStringAsFixed(2)}',
                           style: const TextStyle(
                             color: AppTheme.primary,
                             fontWeight: FontWeight.bold,
                             fontSize: 18,
                           ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: const BoxDecoration(
-                            color: AppTheme.primary,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.add,
-                            color: Colors.white,
-                            size: 16,
-                          ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: const BoxDecoration(
+                          color: AppTheme.primary,
+                          shape: BoxShape.circle,
                         ),
-                      ],
-                    ),
-                  ],
-                ),
+                        child: const Icon(
+                          Icons.add,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
           ],

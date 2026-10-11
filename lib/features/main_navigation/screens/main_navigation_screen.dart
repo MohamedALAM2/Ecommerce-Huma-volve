@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../../core/network/dio_client.dart';
 import '../../../core/theme.dart';
+import '../../home/cubit/home_cubit.dart';
+import '../../home/data/repositories/home_repository.dart';
 import '../../home/screens/home_screen.dart';
 import '../../cart/screens/cart_screen.dart';
 import '../../profile/screens/profile_screen.dart';
@@ -15,6 +19,11 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
 
+  /// Home catalog state lives here so category selection, loaded products,
+  /// and search survive bottom-navigation tab switches. Closed with this
+  /// screen (e.g. on logout).
+  late final HomeCubit _homeCubit;
+
   final List<Widget> _screens = [
     const HomeScreen(),
     const CartScreen(),
@@ -22,9 +31,26 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _homeCubit = HomeCubit(HomeRepository(DioClient.create()));
+  }
+
+  @override
+  void dispose() {
+    _homeCubit.close();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // The Home tab alone needs the catalog Cubit. BlocProvider.value only
+    // exposes the instance owned above (never closes it), so state survives
+    // tab switches and is disposed with this screen on logout.
     return Scaffold(
-      body: _screens[_currentIndex],
+      body: _currentIndex == 0
+          ? BlocProvider.value(value: _homeCubit, child: _screens[0])
+          : _screens[_currentIndex],
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           boxShadow: [
