@@ -28,9 +28,11 @@ class HomeCubit extends Cubit<HomeState> {
   ///
   /// Categories are emitted as soon as they arrive (so the chips appear
   /// early) and are preserved if the products request fails, keeping the
-  /// error/retry state contextual. A categories failure never blocks
-  /// products: previously loaded categories are kept.
+  /// error/retry state contextual. A categories failure is recorded
+  /// explicitly ([HomeState.categoriesErrorMessage]) instead of being
+  /// silently ignored, and never blocks products.
   Future<void> loadHome() async {
+    _searchDebounce?.cancel();
     final requestId = ++_requestId;
     emit(
       state.copyWith(
@@ -44,14 +46,22 @@ class HomeCubit extends Cubit<HomeState> {
       ),
     );
     List<CategoryModel> categories = state.categories;
+    String? categoriesError;
     try {
       categories = await _repository.getCategories();
-    } on CatalogException {
-      // Keep previously loaded categories.
+    } on CatalogException catch (e) {
+      // Explicit failure: keep previously loaded categories (if any) so the
+      // UI can offer a categories-only retry alongside product results.
+      categoriesError = e.message;
     }
     if (requestId != _requestId || isClosed) return;
     // No-op emission when unchanged (Cubit skips equal states).
-    emit(state.copyWith(categories: categories));
+    emit(
+      state.copyWith(
+        categories: categories,
+        categoriesErrorMessage: () => categoriesError,
+      ),
+    );
     try {
       final products = await _repository.getProducts(
         limit: ApiConstants.catalogPageSize,
@@ -74,6 +84,27 @@ class HomeCubit extends Cubit<HomeState> {
           errorMessage: () => e.message,
         ),
       );
+    }
+  }
+
+  /// Re-fetches only the category list, e.g. after a categories failure.
+  ///
+  /// Products, selection, search, and pagination are left untouched, and the
+  /// current selection is preserved even if the refreshed list differs.
+  /// Safe to call repeatedly: a repeated failure simply keeps the error.
+  Future<void> retryCategories() async {
+    try {
+      final categories = await _repository.getCategories();
+      if (isClosed) return;
+      emit(
+        state.copyWith(
+          categories: categories,
+          categoriesErrorMessage: () => null,
+        ),
+      );
+    } on CatalogException catch (e) {
+      if (isClosed) return;
+      emit(state.copyWith(categoriesErrorMessage: () => e.message));
     }
   }
 
@@ -128,6 +159,9 @@ class HomeCubit extends Cubit<HomeState> {
 
   /// Re-runs the current filter (category + search) from page one.
   Future<void> retry() async {
+    // A keystroke timer firing mid-retry would hijack the filter, so a
+    // manual retry always wins over pending input.
+    _searchDebounce?.cancel();
     final requestId = ++_requestId;
     emit(
       state.copyWith(
@@ -173,9 +207,25 @@ class HomeCubit extends Cubit<HomeState> {
 
   /// Appends the next page. Keeps existing products visible; a stale
   /// response (after a filter change) is dropped.
+  ///
+  /// After a failure ([HomeState.loadMoreError]) the scroll listener must
+  /// NOT trigger another fetch: only an explicit [retryLoadMore] retries
+  /// the failed page.
   Future<void> loadMore() async {
-    if (state.isLoadingMore || !state.hasMore) return;
+    if (state.isLoadingMore || state.loadMoreError || !state.hasMore) return;
     if (state.status != HomeStatus.success) return;
+    await _fetchNextPage();
+  }
+
+  /// Manually retries the failed page after [HomeState.loadMoreError].
+  /// Refetches the same offset with the current category/search filters.
+  Future<void> retryLoadMore() async {
+    if (state.isLoadingMore || !state.loadMoreError) return;
+    if (state.status != HomeStatus.success) return;
+    await _fetchNextPage();
+  }
+
+  Future<void> _fetchNextPage() async {
     final requestId = _requestId;
     final categoryId = state.selectedCategoryId;
     final query = state.searchQuery;

@@ -741,6 +741,129 @@ void main() {
     );
 
     blocTest<HomeCubit, HomeState>(
+      'category switch with pending search cancels the debounced query',
+      build: () => HomeCubit(repo),
+      act: (cubit) async {
+        await cubit.loadHome();
+        cubit.onSearchChanged('hoodie');
+        await cubit.selectCategory(4);
+      },
+      wait: const Duration(milliseconds: 600),
+      expect: () => [
+        const HomeState(status: HomeStatus.loading),
+        const HomeState(
+          status: HomeStatus.loading,
+          categories: [tCatShoes, tCatElectronics],
+        ),
+        const HomeState(
+          status: HomeStatus.success,
+          categories: [tCatShoes, tCatElectronics],
+          products: [tShoe, tHoodie],
+          hasMore: false,
+        ),
+        const HomeState(
+          status: HomeStatus.loading,
+          categories: [tCatShoes, tCatElectronics],
+          selectedCategoryId: 4,
+        ),
+        const HomeState(
+          status: HomeStatus.success,
+          categories: [tCatShoes, tCatElectronics],
+          selectedCategoryId: 4,
+          products: [tShoe],
+          hasMore: false,
+        ),
+      ],
+      verify: (cubit) {
+        // Query cleared and the cancelled debounce never fetched.
+        expect(cubit.state.searchQuery, isEmpty);
+        final titles = repo.productCalls.map((c) => c['title']).toList();
+        expect(titles, [null, null]);
+      },
+    );
+
+    blocTest<HomeCubit, HomeState>(
+      'categories failure keeps products visible with an explicit error',
+      setUp: () {
+        repo.categoriesHandler = () async {
+          throw const CatalogException('No cats.');
+        };
+      },
+      build: () => HomeCubit(repo),
+      act: (cubit) => cubit.loadHome(),
+      expect: () => [
+        const HomeState(status: HomeStatus.loading),
+        const HomeState(
+          status: HomeStatus.loading,
+          categoriesErrorMessage: 'No cats.',
+        ),
+        const HomeState(
+          status: HomeStatus.success,
+          products: [tShoe, tHoodie],
+          hasMore: false,
+          categoriesErrorMessage: 'No cats.',
+        ),
+      ],
+    );
+
+    blocTest<HomeCubit, HomeState>(
+      'retryCategories reloads only the categories',
+      setUp: () {
+        repo.categoriesHandler = () async {
+          throw const CatalogException('No cats.');
+        };
+      },
+      build: () => HomeCubit(repo),
+      act: (cubit) async {
+        await cubit.loadHome();
+        repo.categoriesHandler = () async => [tCatShoes];
+        await cubit.retryCategories();
+      },
+      expect: () => [
+        const HomeState(status: HomeStatus.loading),
+        const HomeState(
+          status: HomeStatus.loading,
+          categoriesErrorMessage: 'No cats.',
+        ),
+        const HomeState(
+          status: HomeStatus.success,
+          products: [tShoe, tHoodie],
+          hasMore: false,
+          categoriesErrorMessage: 'No cats.',
+        ),
+        const HomeState(
+          status: HomeStatus.success,
+          categories: [tCatShoes],
+          products: [tShoe, tHoodie],
+          hasMore: false,
+        ),
+      ],
+      verify: (cubit) {
+        // Products fetched exactly once (initial load); the retry touched
+        // categories only and preserved the selection.
+        expect(repo.productCalls, hasLength(1));
+        expect(cubit.state.selectedCategoryId, isNull);
+        expect(cubit.state.hasCategoriesError, isFalse);
+      },
+    );
+
+    test('repeated categories retry keeps the error gracefully', () async {
+      repo.categoriesHandler = () async {
+        throw const CatalogException('No cats.');
+      };
+      final cubit = HomeCubit(repo);
+      await cubit.loadHome();
+      expect(cubit.state.categoriesErrorMessage, 'No cats.');
+      expect(cubit.state.products, [tShoe, tHoodie]);
+
+      await cubit.retryCategories();
+      await cubit.retryCategories();
+      expect(cubit.state.categoriesErrorMessage, 'No cats.');
+      expect(cubit.state.products, [tShoe, tHoodie]);
+      await cubit.close();
+    });
+
+    blocTest<HomeCubit, HomeState>(
       'pagination appends pages and stops at a short page',
       setUp: () {
         final page1 = List.generate(
@@ -874,7 +997,7 @@ void main() {
       await cubit.close();
     });
 
-    test('failed loadMore keeps products and allows retry', () async {
+    test('failed loadMore keeps products and allows explicit retry', () async {
       var page2Calls = 0;
       repo.productsHandler =
           ({
@@ -907,9 +1030,66 @@ void main() {
       expect(cubit.state.loadMoreError, isTrue);
       expect(cubit.state.isLoadingMore, isFalse);
 
+      // Scroll-driven loadMore must NOT auto-retry the failed page.
       await cubit.loadMore();
+      expect(page2Calls, 1);
+      expect(cubit.state.loadMoreError, isTrue);
+      expect(cubit.state.products, hasLength(10));
+
+      // Only the explicit retry refetches the same page.
+      await cubit.retryLoadMore();
+      expect(page2Calls, 2);
       expect(cubit.state.loadMoreError, isFalse);
       expect(cubit.state.hasMore, isFalse);
+      await cubit.close();
+    });
+
+    test('retryLoadMore is a no-op without a prior failure', () async {
+      final cubit = HomeCubit(repo);
+      await cubit.loadHome();
+      final calls = repo.productCalls.length;
+      await cubit.retryLoadMore();
+      expect(repo.productCalls.length, calls);
+      await cubit.close();
+    });
+
+    test('retryLoadMore preserves offset and filters', () async {
+      List<ProductModel> pageOf(int start) => List.generate(
+        10,
+        (i) => ProductModel(
+          id: start + i,
+          title: 'P${start + i}',
+          price: 1,
+          description: 'd',
+          images: const [],
+        ),
+      );
+      repo.productsHandler =
+          ({
+            int limit = 10,
+            int offset = 0,
+            int? categoryId,
+            String? title,
+          }) async {
+            if (categoryId == 4) {
+              if (offset == 0) return pageOf(100);
+              throw const CatalogException('Down.');
+            }
+            return pageOf(0);
+          };
+      final cubit = HomeCubit(repo);
+      await cubit.loadHome();
+      await cubit.selectCategory(4);
+      expect(cubit.state.hasMore, isTrue);
+      await cubit.loadMore();
+      expect(cubit.state.loadMoreError, isTrue);
+      expect(cubit.state.products, hasLength(10));
+
+      await cubit.retryLoadMore();
+      final last = repo.productCalls.last;
+      // Same failed page: offset 10 within category 4.
+      expect(last['offset'], 10);
+      expect(last['categoryId'], 4);
       await cubit.close();
     });
   });
@@ -1070,6 +1250,117 @@ void main() {
       await _pumpFrames(tester);
 
       expect(find.text('Futuristic Holographic Soccer Cleats'), findsOneWidget);
+      await cubit.close();
+    });
+
+    _testHomeWidgets('switching category clears the visible search text', (
+      tester,
+    ) async {
+      final cubit = HomeCubit(repo);
+      await tester.pumpWidget(buildHome(cubit));
+      await _pumpFrames(tester);
+
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Search clothes...'),
+        'hoodie',
+      );
+      // Switch before the 400ms debounce fires.
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.text('Shoes'));
+      await _pumpFrames(tester);
+
+      // Field cleared, results match the selected category (not the query).
+      final field = tester.widget<TextField>(
+        find.widgetWithText(TextField, 'Search clothes...'),
+      );
+      expect(field.controller!.text, isEmpty);
+      expect(find.text('Futuristic Holographic Soccer Cleats'), findsOneWidget);
+
+      // Past the original debounce window: the cancelled query must never
+      // have fetched.
+      await _pumpFrames(tester);
+      expect(repo.productCalls.where((c) => c['title'] == 'hoodie'), isEmpty);
+      await cubit.close();
+    });
+
+    _testHomeWidgets(
+      'categories failure shows a retry banner without losing products',
+      (tester) async {
+        repo.categoriesHandler = () async {
+          throw const CatalogException('No cats.');
+        };
+        final cubit = HomeCubit(repo);
+        await tester.pumpWidget(buildHome(cubit));
+        await _pumpFrames(tester);
+
+        // Products visible, categories-only retry offered.
+        expect(
+          find.text('Futuristic Holographic Soccer Cleats'),
+          findsOneWidget,
+        );
+        expect(find.text('All'), findsOneWidget);
+        expect(find.text('Shoes'), findsNothing);
+        expect(find.text('Retry'), findsOneWidget);
+
+        repo.categoriesHandler = () async => [tCatShoes];
+        await tester.tap(find.text('Retry'));
+        await _pumpFrames(tester);
+
+        // Categories appear; existing products untouched.
+        expect(find.text('Shoes'), findsOneWidget);
+        expect(
+          find.text('Futuristic Holographic Soccer Cleats'),
+          findsOneWidget,
+        );
+        expect(find.text('Retry'), findsNothing);
+        await cubit.close();
+      },
+    );
+
+    _testHomeWidgets('failed pagination does not auto-retry on scroll', (
+      tester,
+    ) async {
+      var page2Calls = 0;
+      ProductModel pageItem(int id) => ProductModel(
+        id: id,
+        title: 'P$id',
+        price: 1,
+        description: 'd',
+        images: const [],
+      );
+      repo.productsHandler =
+          ({
+            int limit = 10,
+            int offset = 0,
+            int? categoryId,
+            String? title,
+          }) async {
+            if (offset == 0) return List.generate(10, (i) => pageItem(i));
+            page2Calls++;
+            if (page2Calls == 1) throw const CatalogException('Down.');
+            return [pageItem(99)];
+          };
+      final cubit = HomeCubit(repo);
+      await tester.pumpWidget(buildHome(cubit));
+      await _pumpFrames(tester);
+
+      // Scroll to the bottom: first page-2 attempt fails.
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -3000));
+      await _pumpFrames(tester);
+      expect(find.text('Couldn\'t load more. Tap to retry.'), findsOneWidget);
+      expect(page2Calls, 1);
+
+      // Scrolling again must NOT refetch the failed page automatically.
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -2000));
+      await _pumpFrames(tester);
+      expect(page2Calls, 1);
+
+      // Only the explicit retry refetches and appends.
+      await tester.tap(find.text('Couldn\'t load more. Tap to retry.'));
+      await _pumpFrames(tester);
+      expect(page2Calls, 2);
+      expect(find.text('P99'), findsOneWidget);
+      expect(find.text('Couldn\'t load more. Tap to retry.'), findsNothing);
       await cubit.close();
     });
 

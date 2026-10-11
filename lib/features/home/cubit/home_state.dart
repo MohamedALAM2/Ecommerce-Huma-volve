@@ -21,6 +21,10 @@ class HomeState {
   final bool loadMoreError;
   final String? errorMessage;
 
+  /// Set when loading the category list fails. Products are independent and
+  /// may still be visible; the UI offers a categories-only retry.
+  final String? categoriesErrorMessage;
+
   const HomeState({
     this.status = HomeStatus.initial,
     this.categories = const [],
@@ -31,9 +35,11 @@ class HomeState {
     this.hasMore = true,
     this.loadMoreError = false,
     this.errorMessage,
+    this.categoriesErrorMessage,
   });
 
   bool get isAllSelected => selectedCategoryId == null;
+  bool get hasCategoriesError => categoriesErrorMessage != null;
 
   String selectedCategoryName() {
     final id = selectedCategoryId;
@@ -54,6 +60,7 @@ class HomeState {
     bool? hasMore,
     bool? loadMoreError,
     String? Function()? errorMessage,
+    String? Function()? categoriesErrorMessage,
   }) {
     return HomeState(
       status: status ?? this.status,
@@ -67,6 +74,9 @@ class HomeState {
       hasMore: hasMore ?? this.hasMore,
       loadMoreError: loadMoreError ?? this.loadMoreError,
       errorMessage: errorMessage != null ? errorMessage() : this.errorMessage,
+      categoriesErrorMessage: categoriesErrorMessage != null
+          ? categoriesErrorMessage()
+          : this.categoriesErrorMessage,
     );
   }
 
@@ -82,7 +92,8 @@ class HomeState {
             other.isLoadingMore == isLoadingMore &&
             other.hasMore == hasMore &&
             other.loadMoreError == loadMoreError &&
-            other.errorMessage == errorMessage);
+            other.errorMessage == errorMessage &&
+            other.categoriesErrorMessage == categoriesErrorMessage);
   }
 
   @override
@@ -96,5 +107,6 @@ class HomeState {
     hasMore,
     loadMoreError,
     errorMessage,
+    categoriesErrorMessage,
   );
 }
