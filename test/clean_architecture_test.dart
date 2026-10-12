@@ -520,8 +520,9 @@ void main() {
         ..storedAccessToken = 'a'
         ..storedRefreshToken = 'r';
       final result = await RestoreSessionUseCase(repo)();
-      expect(result?.user, _user);
-      expect(result?.tokens.accessToken, 'a');
+      expect(result.outcome, RestoreOutcome.authenticated);
+      expect(result.user, _user);
+      expect(result.tokens!.accessToken, 'a');
       expect(repo.calls, ['getProfile']);
     });
 
@@ -538,8 +539,9 @@ void main() {
         return _user;
       };
       final result = await RestoreSessionUseCase(repo)();
-      expect(result?.user, _user);
-      expect(result?.tokens.accessToken, 'new-access-token');
+      expect(result.outcome, RestoreOutcome.authenticated);
+      expect(result.user, _user);
+      expect(result.tokens!.accessToken, 'new-access-token');
       expect(repo.storedAccessToken, 'new-access-token');
       expect(repo.cleared, isFalse);
     });
@@ -556,7 +558,9 @@ void main() {
         repo.tokensHandler = (_) async {
           throw const UnauthorizedFailure('Revoked.', statusCode: 401);
         };
-        expect(await RestoreSessionUseCase(repo)(), isNull);
+        final result = await RestoreSessionUseCase(repo)();
+        expect(result.outcome, RestoreOutcome.invalidSession);
+        expect(result.user, isNull);
         expect(repo.cleared, isTrue);
         expect(repo.storedAccessToken, isNull);
       },
@@ -569,7 +573,9 @@ void main() {
       repo.profileHandler = (_) async {
         throw const NetworkFailure();
       };
-      expect(await RestoreSessionUseCase(repo)(), isNull);
+      final result = await RestoreSessionUseCase(repo)();
+      expect(result.outcome, RestoreOutcome.temporaryFailure);
+      expect(result.user, isNull);
       expect(repo.cleared, isFalse);
       expect(repo.storedAccessToken, 'a');
       expect(repo.storedRefreshToken, 'r');
@@ -590,14 +596,46 @@ void main() {
       repo.tokensHandler = (_) async {
         throw const TimeoutFailure();
       };
-      expect(await RestoreSessionUseCase(repo)(), isNull);
+      final result = await RestoreSessionUseCase(repo)();
+      expect(result.outcome, RestoreOutcome.temporaryFailure);
+      expect(result.user, isNull);
       expect(repo.cleared, isFalse);
       expect(repo.storedRefreshToken, 'r');
     });
 
-    test('RestoreSessionUseCase returns null with no stored session', () async {
-      expect(await RestoreSessionUseCase(FakeAuthRepository())(), isNull);
+    test('RestoreSessionUseCase reports no stored session', () async {
+      final result = await RestoreSessionUseCase(FakeAuthRepository())();
+      expect(result.outcome, RestoreOutcome.noStoredSession);
+      expect(result.user, isNull);
     });
+
+    test(
+      'RestoreSessionUseCase preserves tokens on malformed refresh response',
+      () async {
+        // A 200 response with an unusable body is unexpected, NOT a
+        // credential rejection: credentials must survive it.
+        final repo = FakeAuthRepository()
+          ..storedAccessToken = 'expired'
+          ..storedRefreshToken = 'r';
+        var profileCalls = 0;
+        repo.profileHandler = (_) async {
+          profileCalls++;
+          if (profileCalls == 1) {
+            throw const UnauthorizedFailure('Expired.', statusCode: 401);
+          }
+          return _user;
+        };
+        repo.tokensHandler = (_) async {
+          throw const UnexpectedFailure(
+            'Session expired. Please log in again.',
+          );
+        };
+        final result = await RestoreSessionUseCase(repo)();
+        expect(result.outcome, RestoreOutcome.temporaryFailure);
+        expect(repo.cleared, isFalse);
+        expect(repo.storedRefreshToken, 'r');
+      },
+    );
 
     test('LogoutUseCase clears the session', () async {
       final repo = FakeAuthRepository()

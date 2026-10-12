@@ -122,16 +122,18 @@ class AuthRemoteDataSource {
       );
       final data = response.data;
       if (data == null) {
-        throw const ApiException.response(
-          401,
+        // A successful-but-empty response is malformed, NOT a credential
+        // rejection: classify as unknown so stored credentials are
+        // preserved (see RestoreSessionUseCase).
+        throw const ApiException.unknown(
           'Session expired. Please log in again.',
         );
       }
       try {
         return AuthTokens.fromJson(Map<String, dynamic>.from(data));
       } on FormatException {
-        throw const ApiException.response(
-          401,
+        // Same as above: the backend answered, but unusably.
+        throw const ApiException.unknown(
           'Session expired. Please log in again.',
         );
       }

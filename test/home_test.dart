@@ -429,6 +429,76 @@ void main() {
       final product = await HomeRemoteDataSource(dio).getProductById(35);
       expect(product.toEntity(), tShoe);
     });
+
+    group('malformed responses', () {
+      test(
+        'products object instead of list maps to a friendly error',
+        () async {
+          final dio = _mockedDio(
+            (a) => a.onGet(
+              ApiConstants.products,
+              (server) => server.reply(200, {'unexpected': 'object'}),
+            ),
+          );
+          await expectLater(
+            () => HomeRemoteDataSource(dio).getProducts(),
+            throwsA(
+              isA<ApiException>()
+                  .having((e) => e.kind, 'kind', isNot(ApiErrorKind.network))
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('Could not load products.'),
+                  ),
+            ),
+          );
+        },
+      );
+
+      test(
+        'categories string instead of list maps to a friendly error',
+        () async {
+          final dio = _mockedDio(
+            (a) => a.onGet(
+              ApiConstants.categories,
+              (server) => server.reply(200, 'oops'),
+            ),
+          );
+          await expectLater(
+            () => HomeRemoteDataSource(dio).getCategories(),
+            throwsA(
+              isA<ApiException>().having(
+                (e) => e.message,
+                'message',
+                contains('Could not load categories.'),
+              ),
+            ),
+          );
+        },
+      );
+
+      test(
+        'product details list instead of object maps to a friendly error',
+        () async {
+          final dio = _mockedDio(
+            (a) => a.onGet(
+              '${ApiConstants.products}/35',
+              (server) => server.reply(200, [shoeJson()]),
+            ),
+          );
+          await expectLater(
+            () => HomeRemoteDataSource(dio).getProductById(35),
+            throwsA(
+              isA<ApiException>().having(
+                (e) => e.message,
+                'message',
+                contains('Could not load product details.'),
+              ),
+            ),
+          );
+        },
+      );
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -809,6 +879,30 @@ void main() {
           products: [tShoe, tHoodie],
           hasMore: false,
           categoriesErrorMessage: 'No cats.',
+        ),
+      ],
+    );
+
+    blocTest<HomeCubit, HomeState>(
+      'malformed products response surfaces a friendly error',
+      setUp: () {
+        repo.productsHandler =
+            ({int? limit, int? offset, int? categoryId, String? title}) async {
+              throw const UnexpectedFailure('Could not load products.');
+            };
+      },
+      build: () => _makeCubit(repo),
+      act: (cubit) => cubit.loadHome(),
+      expect: () => [
+        const HomeState(status: HomeStatus.loading),
+        const HomeState(
+          status: HomeStatus.loading,
+          categories: [tCatShoes, tCatElectronics],
+        ),
+        const HomeState(
+          status: HomeStatus.failure,
+          categories: [tCatShoes, tCatElectronics],
+          errorMessage: 'Could not load products.',
         ),
       ],
     );
@@ -1224,6 +1318,32 @@ void main() {
         '',
       );
       await tester.pump(const Duration(milliseconds: 500));
+      await _pumpFrames(tester);
+
+      expect(find.text('Futuristic Holographic Soccer Cleats'), findsOneWidget);
+      await cubit.close();
+    });
+
+    _testHomeWidgets('invalid products response shows error with retry', (
+      tester,
+    ) async {
+      var backendFixed = false;
+      repo.productsHandler =
+          ({int? limit, int? offset, int? categoryId, String? title}) async {
+            if (!backendFixed) {
+              throw const UnexpectedFailure('Could not load products.');
+            }
+            return [tShoe];
+          };
+      final cubit = _makeCubit(repo);
+      await tester.pumpWidget(buildHome(cubit));
+      await _pumpFrames(tester);
+
+      expect(find.text('Could not load products.'), findsOneWidget);
+      expect(find.text('Retry'), findsOneWidget);
+
+      backendFixed = true;
+      await tester.tap(find.text('Retry'));
       await _pumpFrames(tester);
 
       expect(find.text('Futuristic Holographic Soccer Cleats'), findsOneWidget);

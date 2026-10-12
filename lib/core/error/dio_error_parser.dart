@@ -16,6 +16,11 @@ bool isTimeoutError(DioException e) {
 }
 
 bool isNetworkError(DioException e) {
+  // A failed response cast (e.g. the server returned an object where a
+  // list was expected) surfaces as DioExceptionType.unknown with a
+  // TypeError: that is a shape problem, not a connectivity problem, and
+  // must not be reported as "no internet".
+  if (e.error is TypeError) return false;
   return e.type == DioExceptionType.connectionError ||
       e.type == DioExceptionType.unknown ||
       e.error is SocketException;

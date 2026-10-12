@@ -20,6 +20,7 @@ import 'package:ecommerce_app_huma_volve/features/auth/domain/usecases/signup_us
 import 'package:ecommerce_app_huma_volve/features/auth/login/screens/login_screen.dart';
 import 'package:ecommerce_app_huma_volve/features/auth/session/auth_session.dart';
 import 'package:ecommerce_app_huma_volve/features/auth/sign_up/screens/sign_up_screen.dart';
+import 'package:ecommerce_app_huma_volve/features/splash/screens/splash_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http_mock_adapter/http_mock_adapter.dart';
@@ -451,6 +452,28 @@ void main() {
           .refreshToken('test-refresh-token');
       expect(tokens.accessToken, 'new-access-token');
     });
+
+    test(
+      'malformed successful refresh is unexpected, not unauthorized',
+      () async {
+        // A 200 response with an unusable body must NOT look like a 401:
+        // callers clear stored credentials only on genuine rejection.
+        final dio = _buildDio(
+          (d) => DioAdapter(dio: d, matcher: const UrlRequestMatcher()).onPost(
+            ApiConstants.refreshToken,
+            (server) => server.reply(201, {'unexpected': true}),
+          ),
+        );
+        await expectLater(
+          () => AuthRemoteDataSource(dio: dio).refreshToken('r'),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.kind, 'kind', ApiErrorKind.unknown)
+                .having((e) => e.statusCode, 'status', isNull),
+          ),
+        );
+      },
+    );
   });
 
   group('AuthSession', () {
@@ -851,6 +874,70 @@ void main() {
 
       // Successful registration navigates to the Login screen.
       expect(find.text('Welcome Back!'), findsOneWidget);
+    });
+  });
+
+  group('SplashScreen session routing', () {
+    testWidgets('no stored session routes to Login', (tester) async {
+      AuthSession.debugSetInstance(_sessionWith(FakeAuthRepository()));
+
+      await tester.pumpWidget(const MaterialApp(home: SplashScreen()));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Welcome Back!'), findsOneWidget);
+    });
+
+    testWidgets('invalid session routes to Login', (tester) async {
+      final repo = FakeAuthRepository();
+      repo.profileHandler = (_) async {
+        throw const UnauthorizedFailure(
+          'Session expired. Please log in again.',
+          statusCode: 401,
+        );
+      };
+      repo.refreshHandler = (_) async {
+        throw const UnauthorizedFailure(
+          'Session expired. Please log in again.',
+          statusCode: 401,
+        );
+      };
+      await repo.saveSession(accessToken: 'expired', refreshToken: 'bad');
+      AuthSession.debugSetInstance(_sessionWith(repo));
+
+      await tester.pumpWidget(const MaterialApp(home: SplashScreen()));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Welcome Back!'), findsOneWidget);
+      expect(repo.cleared, isTrue);
+    });
+
+    testWidgets('offline restore offers Retry and keeps credentials', (
+      tester,
+    ) async {
+      final repo = FakeAuthRepository();
+      repo.profileHandler = (_) async {
+        throw const NetworkFailure();
+      };
+      await repo.saveSession(accessToken: 'a', refreshToken: 'r');
+      AuthSession.debugSetInstance(_sessionWith(repo));
+
+      await tester.pumpWidget(const MaterialApp(home: SplashScreen()));
+      await tester.pumpAndSettle();
+
+      // Stayed on Splash with a Retry action instead of Login...
+      expect(find.text('Huma-volve'), findsOneWidget);
+      expect(find.text('Retry'), findsOneWidget);
+      expect(find.text('Welcome Back!'), findsNothing);
+      // ...and nothing was deleted.
+      expect(repo.cleared, isFalse);
+
+      // Retrying while still offline stays put without granting access.
+      await tester.tap(find.text('Retry'));
+      await tester.pumpAndSettle();
+      expect(find.text('Huma-volve'), findsOneWidget);
+      expect(find.text('Retry'), findsOneWidget);
+      expect(find.text('Welcome Back!'), findsNothing);
+      expect(repo.cleared, isFalse);
     });
   });
 }

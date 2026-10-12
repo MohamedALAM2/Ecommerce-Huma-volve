@@ -25,6 +25,10 @@ class HomeRemoteDataSource {
           .toList();
     } on DioException catch (e) {
       throw _mapError(e, fallback: 'Could not load categories.');
+    } catch (_) {
+      // Non-Dio mapping failures (unexpected shapes): still an
+      // application-level failure so the Cubit can show error + Retry.
+      throw const ApiException.unknown('Could not load categories.');
     }
   }
 
@@ -56,6 +60,8 @@ class HomeRemoteDataSource {
           .toList();
     } on DioException catch (e) {
       throw _mapError(e, fallback: 'Could not load products.');
+    } catch (_) {
+      throw const ApiException.unknown('Could not load products.');
     }
   }
 
@@ -74,6 +80,8 @@ class HomeRemoteDataSource {
       throw _mapError(e, fallback: 'Could not load product details.');
     } on ApiException {
       rethrow;
+    } catch (_) {
+      throw const ApiException.unknown('Could not load product details.');
     }
   }
 

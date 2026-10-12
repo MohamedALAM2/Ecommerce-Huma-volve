@@ -4,7 +4,8 @@ import '../../../core/error/app_failure.dart';
 import '../domain/entities/user_entity.dart';
 import '../domain/usecases/login_usecase.dart';
 import '../domain/usecases/logout_usecase.dart';
-import '../domain/usecases/restore_session_usecase.dart';
+import '../domain/usecases/restore_session_usecase.dart'
+    show RestoreSessionUseCase, RestoreOutcome;
 import '../domain/usecases/signup_usecase.dart';
 
 // ignore_for_file: prefer_initializing_formals
@@ -28,6 +29,7 @@ class AuthSession extends ChangeNotifier {
   String? _accessToken;
   String? _refreshToken;
   bool _isAuthenticating = false;
+  RestoreOutcome? _lastRestoreOutcome;
 
   AuthSession({
     required SignUpUseCase signUp,
@@ -83,6 +85,11 @@ class AuthSession extends ChangeNotifier {
   bool get isAuthenticated => _accessToken != null && _currentUser != null;
   bool get isAuthenticating => _isAuthenticating;
 
+  /// Outcome of the most recent [restoreSession] call, if any. Lets Splash
+  /// distinguish a transient verification failure (stored credentials still
+  /// exist: offer Retry) from no/invalid sessions (go to Login).
+  RestoreOutcome? get lastRestoreOutcome => _lastRestoreOutcome;
+
   /// Attempts a fresh registration. Does not log the user in; the caller
   /// navigates to Login on success.
   Future<UserEntity> signUp({
@@ -120,13 +127,16 @@ class AuthSession extends ChangeNotifier {
   }
 
   /// Restores a previous session via [RestoreSessionUseCase]. Returns the
-  /// user on success, `null` when no valid session exists.
+  /// user on success, `null` when no valid session exists. Records the
+  /// [RestoreOutcome] in [lastRestoreOutcome] for Splash routing.
   Future<UserEntity?> restoreSession() async {
-    final session = await _restoreSession();
+    final result = await _restoreSession();
+    _lastRestoreOutcome = result.outcome;
+    final session = result.user;
     if (session != null) {
-      _accessToken = session.tokens.accessToken;
-      _refreshToken = session.tokens.refreshToken;
-      _currentUser = session.user;
+      _accessToken = result.tokens!.accessToken;
+      _refreshToken = result.tokens!.refreshToken;
+      _currentUser = session;
       notifyListeners();
     } else if (_currentUser != null ||
         _accessToken != null ||
@@ -136,7 +146,7 @@ class AuthSession extends ChangeNotifier {
       _refreshToken = null;
       notifyListeners();
     }
-    return session?.user;
+    return session;
   }
 
   /// Clears tokens and user state.
