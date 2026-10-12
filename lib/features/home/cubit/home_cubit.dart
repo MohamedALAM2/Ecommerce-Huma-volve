@@ -2,27 +2,42 @@ import 'dart:async';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+// ignore_for_file: prefer_initializing_formals
+// (Constructor takes public use-case parameters; fields are private.)
+
+import '../../../../core/error/app_failure.dart';
 import '../../../../core/network/api_constants.dart';
-import '../data/catalog_exception.dart';
-import '../data/models/category_model.dart';
-import '../data/repositories/home_repository.dart';
+import '../domain/entities/category_entity.dart';
+import '../domain/usecases/get_categories_usecase.dart';
+import '../domain/usecases/get_products_usecase.dart';
 import 'home_state.dart';
 
 /// Manages the Home catalog: initial load, category filtering, backend
 /// search (debounced), pagination, and retry.
 ///
+/// Depends only on Domain use cases — never on Dio, data sources, or
+/// concrete repositories. All state-management behavior (request-id
+/// stale-response protection, debounce, pagination guards) is preserved
+/// from the previous implementation.
+///
 /// Stale-response protection: every logical fetch takes a request id. Only
 /// the latest request may emit, so a slow Category A response can never
 /// overwrite Category B's products.
 class HomeCubit extends Cubit<HomeState> {
-  final HomeRepository _repository;
+  final GetProductsUseCase _getProducts;
+  final GetCategoriesUseCase _getCategories;
   Timer? _searchDebounce;
 
   int _requestId = 0;
 
   static const searchDebounce = Duration(milliseconds: 400);
 
-  HomeCubit(this._repository) : super(const HomeState());
+  HomeCubit({
+    required GetProductsUseCase getProducts,
+    required GetCategoriesUseCase getCategories,
+  }) : _getProducts = getProducts,
+       _getCategories = getCategories,
+       super(const HomeState());
 
   /// Initial load: categories first, then the first product page.
   ///
@@ -45,11 +60,11 @@ class HomeCubit extends Cubit<HomeState> {
         errorMessage: () => null,
       ),
     );
-    List<CategoryModel> categories = state.categories;
+    List<CategoryEntity> categories = state.categories;
     String? categoriesError;
     try {
-      categories = await _repository.getCategories();
-    } on CatalogException catch (e) {
+      categories = await _getCategories();
+    } on AppFailure catch (e) {
       // Explicit failure: keep previously loaded categories (if any) so the
       // UI can offer a categories-only retry alongside product results.
       categoriesError = e.message;
@@ -63,9 +78,7 @@ class HomeCubit extends Cubit<HomeState> {
       ),
     );
     try {
-      final products = await _repository.getProducts(
-        limit: ApiConstants.catalogPageSize,
-      );
+      final products = await _getProducts(limit: ApiConstants.catalogPageSize);
       if (requestId != _requestId || isClosed) return;
       emit(
         state.copyWith(
@@ -76,7 +89,7 @@ class HomeCubit extends Cubit<HomeState> {
           hasMore: products.length == ApiConstants.catalogPageSize,
         ),
       );
-    } on CatalogException catch (e) {
+    } on AppFailure catch (e) {
       if (requestId != _requestId || isClosed) return;
       emit(
         state.copyWith(
@@ -94,7 +107,7 @@ class HomeCubit extends Cubit<HomeState> {
   /// Safe to call repeatedly: a repeated failure simply keeps the error.
   Future<void> retryCategories() async {
     try {
-      final categories = await _repository.getCategories();
+      final categories = await _getCategories();
       if (isClosed) return;
       emit(
         state.copyWith(
@@ -102,7 +115,7 @@ class HomeCubit extends Cubit<HomeState> {
           categoriesErrorMessage: () => null,
         ),
       );
-    } on CatalogException catch (e) {
+    } on AppFailure catch (e) {
       if (isClosed) return;
       emit(state.copyWith(categoriesErrorMessage: () => e.message));
     }
@@ -181,7 +194,7 @@ class HomeCubit extends Cubit<HomeState> {
     final categoryId = state.selectedCategoryId;
     final query = state.searchQuery;
     try {
-      final products = await _repository.getProducts(
+      final products = await _getProducts(
         limit: ApiConstants.catalogPageSize,
         categoryId: categoryId,
         title: query.isEmpty ? null : query,
@@ -194,7 +207,7 @@ class HomeCubit extends Cubit<HomeState> {
           hasMore: products.length == ApiConstants.catalogPageSize,
         ),
       );
-    } on CatalogException catch (e) {
+    } on AppFailure catch (e) {
       if (requestId != _requestId || isClosed) return;
       emit(
         state.copyWith(
@@ -232,7 +245,7 @@ class HomeCubit extends Cubit<HomeState> {
     final offset = state.products.length;
     emit(state.copyWith(isLoadingMore: true, loadMoreError: false));
     try {
-      final more = await _repository.getProducts(
+      final more = await _getProducts(
         limit: ApiConstants.catalogPageSize,
         offset: offset,
         categoryId: categoryId,
@@ -250,7 +263,7 @@ class HomeCubit extends Cubit<HomeState> {
           hasMore: more.length == ApiConstants.catalogPageSize,
         ),
       );
-    } on CatalogException {
+    } on AppFailure {
       if (isClosed || requestId != _requestId) return;
       emit(state.copyWith(isLoadingMore: false, loadMoreError: true));
     }

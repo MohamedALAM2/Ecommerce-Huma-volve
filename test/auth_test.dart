@@ -1,13 +1,22 @@
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:ecommerce_app_huma_volve/core/error/api_exception.dart';
+import 'package:ecommerce_app_huma_volve/core/error/app_failure.dart';
 import 'package:ecommerce_app_huma_volve/core/network/api_constants.dart';
 import 'package:ecommerce_app_huma_volve/core/validators.dart';
-import 'package:ecommerce_app_huma_volve/features/auth/data/auth_exception.dart';
+import 'package:ecommerce_app_huma_volve/features/auth/data/datasources/auth_local_data_source.dart';
+import 'package:ecommerce_app_huma_volve/features/auth/data/datasources/auth_remote_data_source.dart';
 import 'package:ecommerce_app_huma_volve/features/auth/data/models/auth_models.dart';
 import 'package:ecommerce_app_huma_volve/features/auth/data/models/user_model.dart';
-import 'package:ecommerce_app_huma_volve/features/auth/data/services/auth_service.dart';
-import 'package:ecommerce_app_huma_volve/features/auth/data/services/auth_storage.dart';
+import 'package:ecommerce_app_huma_volve/features/auth/data/repositories/auth_repository_impl.dart';
+import 'package:ecommerce_app_huma_volve/features/auth/domain/entities/auth_tokens_entity.dart';
+import 'package:ecommerce_app_huma_volve/features/auth/domain/entities/user_entity.dart';
+import 'package:ecommerce_app_huma_volve/features/auth/domain/repositories/auth_repository.dart';
+import 'package:ecommerce_app_huma_volve/features/auth/domain/usecases/login_usecase.dart';
+import 'package:ecommerce_app_huma_volve/features/auth/domain/usecases/logout_usecase.dart';
+import 'package:ecommerce_app_huma_volve/features/auth/domain/usecases/restore_session_usecase.dart';
+import 'package:ecommerce_app_huma_volve/features/auth/domain/usecases/signup_usecase.dart';
 import 'package:ecommerce_app_huma_volve/features/auth/login/screens/login_screen.dart';
 import 'package:ecommerce_app_huma_volve/features/auth/session/auth_session.dart';
 import 'package:ecommerce_app_huma_volve/features/auth/sign_up/screens/sign_up_screen.dart';
@@ -54,34 +63,137 @@ DioException _timeoutError(String path) {
   );
 }
 
-/// Fake service simulating: first profile call 401, then refresh succeeds
-/// and the retry profile call returns the user. Used because a single
-/// http_mock_adapter route cannot reply with two different status codes.
-class _ExpiringThenValidAuthService extends AuthService {
-  int _profileCalls = 0;
+/// Fake implementing the Domain repository contract (no Dio/HTTP), with an
+/// in-memory token store. Used for session-orchestration tests.
+class FakeAuthRepository implements AuthRepository {
+  static const testUser = UserEntity(
+    id: 1,
+    email: 'john@mail.com',
+    name: 'Jhon',
+    role: 'customer',
+    avatar: 'https://i.imgur.com/LDOO4Qs.jpg',
+  );
+  static const testTokens = AuthTokensEntity(
+    accessToken: 'test-access-token',
+    refreshToken: 'test-refresh-token',
+  );
+  static const refreshedTokens = AuthTokensEntity(
+    accessToken: 'new-access-token',
+    refreshToken: 'new-refresh-token',
+  );
 
-  _ExpiringThenValidAuthService() : super(dio: Dio());
+  Future<UserEntity> Function({
+    required String name,
+    required String email,
+    required String password,
+  })?
+  signUpHandler;
+  Future<AuthTokensEntity> Function({
+    required String email,
+    required String password,
+  })?
+  loginHandler;
+  Future<UserEntity> Function(String accessToken)? profileHandler;
+  Future<AuthTokensEntity> Function(String refreshToken)? refreshHandler;
+
+  final List<String> calls = [];
+  String? storedAccessToken;
+  String? storedRefreshToken;
+  bool cleared = false;
 
   @override
-  Future<UserModel> getProfile(String accessToken) async {
-    _profileCalls++;
-    if (_profileCalls == 1) {
-      throw const AuthException(
-        'Session expired. Please log in again.',
-        statusCode: 401,
-      );
+  Future<UserEntity> signUp({
+    required String name,
+    required String email,
+    required String password,
+  }) {
+    calls.add('signUp');
+    final handler = signUpHandler;
+    if (handler != null) {
+      return handler(name: name, email: email, password: password);
     }
-    return UserModel.fromJson(Map<String, dynamic>.from(_testUserJson));
+    return Future.value(testUser);
   }
 
   @override
-  Future<AuthTokens> refreshToken(String refreshTokenValue) async {
-    return AuthTokens.fromJson(Map<String, dynamic>.from(_refreshedTokensJson));
+  Future<AuthTokensEntity> login({
+    required String email,
+    required String password,
+  }) {
+    calls.add('login');
+    final handler = loginHandler;
+    if (handler != null) {
+      return handler(email: email, password: password);
+    }
+    return Future.value(testTokens);
+  }
+
+  @override
+  Future<UserEntity> getProfile(String accessToken) {
+    calls.add('getProfile');
+    final handler = profileHandler;
+    if (handler != null) return handler(accessToken);
+    return Future.value(testUser);
+  }
+
+  @override
+  Future<AuthTokensEntity> refreshToken(String refreshToken) {
+    calls.add('refreshToken');
+    final handler = refreshHandler;
+    if (handler != null) return handler(refreshToken);
+    return Future.value(refreshedTokens);
+  }
+
+  @override
+  Future<bool> isEmailAvailable(String email) => Future.value(true);
+
+  @override
+  Future<void> saveSession({
+    required String accessToken,
+    required String refreshToken,
+  }) async {
+    calls.add('saveSession');
+    storedAccessToken = accessToken;
+    storedRefreshToken = refreshToken;
+  }
+
+  @override
+  Future<String?> readAccessToken() async => storedAccessToken;
+
+  @override
+  Future<String?> readRefreshToken() async => storedRefreshToken;
+
+  @override
+  Future<void> clearSession() async {
+    calls.add('clearSession');
+    cleared = true;
+    storedAccessToken = null;
+    storedRefreshToken = null;
   }
 }
 
+/// Builds an [AuthSession] exactly like the DI container does: use cases
+/// over the given repository.
+AuthSession _sessionWith(AuthRepository repo) {
+  return AuthSession(
+    signUp: SignUpUseCase(repo),
+    login: LoginUseCase(repo),
+    restoreSession: RestoreSessionUseCase(repo),
+    logout: LogoutUseCase(repo),
+  );
+}
+
+/// Builds a real repository implementation over a mocked Dio client plus an
+/// in-memory local data source.
+AuthRepository _repoWith(Dio dio, AuthLocalDataSource local) {
+  return AuthRepositoryImpl(
+    remote: AuthRemoteDataSource(dio: dio),
+    local: local,
+  );
+}
+
 void main() {
-  group('AuthService.signUp', () {
+  group('AuthRemoteDataSource.signUp', () {
     test('successful registration returns the created user', () async {
       final dio = _buildDio(
         (d) => DioAdapter(dio: d, matcher: const UrlRequestMatcher()).onPost(
@@ -89,9 +201,9 @@ void main() {
           (server) => server.reply(201, _testUserJson),
         ),
       );
-      final service = AuthService(dio: dio);
+      final dataSource = AuthRemoteDataSource(dio: dio);
 
-      final user = await service.signUp(
+      final user = await dataSource.signUp(
         name: 'Jhon',
         email: 'john@mail.com',
         password: 'changeme',
@@ -115,16 +227,19 @@ void main() {
           }),
         ),
       );
-      final service = AuthService(dio: dio);
+      final dataSource = AuthRemoteDataSource(dio: dio);
 
       expect(
-        () => service.signUp(name: 'x', email: 'bad', password: '123'),
+        () => dataSource.signUp(name: 'x', email: 'bad', password: '123'),
         throwsA(
-          isA<AuthException>().having(
-            (e) => e.message,
-            'message',
-            contains('email must be an email'),
-          ),
+          isA<ApiException>()
+              .having((e) => e.kind, 'kind', ApiErrorKind.response)
+              .having((e) => e.statusCode, 'status', 400)
+              .having(
+                (e) => e.message,
+                'message',
+                contains('email must be an email'),
+              ),
         ),
       );
     });
@@ -136,20 +251,18 @@ void main() {
           (server) => server.throws(0, _networkError(ApiConstants.users)),
         ),
       );
-      final service = AuthService(dio: dio);
+      final dataSource = AuthRemoteDataSource(dio: dio);
 
       expect(
-        () => service.signUp(
+        () => dataSource.signUp(
           name: 'Jhon',
           email: 'john@mail.com',
           password: 'changeme',
         ),
         throwsA(
-          isA<AuthException>().having(
-            (e) => e.message,
-            'message',
-            contains('No internet'),
-          ),
+          isA<ApiException>()
+              .having((e) => e.kind, 'kind', ApiErrorKind.network)
+              .having((e) => e.message, 'message', contains('No internet')),
         ),
       );
     });
@@ -161,26 +274,24 @@ void main() {
           (server) => server.throws(0, _timeoutError(ApiConstants.users)),
         ),
       );
-      final service = AuthService(dio: dio);
+      final dataSource = AuthRemoteDataSource(dio: dio);
 
       expect(
-        () => service.signUp(
+        () => dataSource.signUp(
           name: 'Jhon',
           email: 'john@mail.com',
           password: 'changeme',
         ),
         throwsA(
-          isA<AuthException>().having(
-            (e) => e.message,
-            'message',
-            contains('timed out'),
-          ),
+          isA<ApiException>()
+              .having((e) => e.kind, 'kind', ApiErrorKind.timeout)
+              .having((e) => e.message, 'message', contains('timed out')),
         ),
       );
     });
   });
 
-  group('AuthService.login', () {
+  group('AuthRemoteDataSource.login', () {
     test('successful login returns token pair', () async {
       final dio = _buildDio(
         (d) => DioAdapter(dio: d, matcher: const UrlRequestMatcher()).onPost(
@@ -188,9 +299,9 @@ void main() {
           (server) => server.reply(201, _testTokensJson),
         ),
       );
-      final service = AuthService(dio: dio);
+      final dataSource = AuthRemoteDataSource(dio: dio);
 
-      final tokens = await service.login(
+      final tokens = await dataSource.login(
         email: 'john@mail.com',
         password: 'changeme',
       );
@@ -206,12 +317,13 @@ void main() {
               server.reply(401, {'message': 'Unauthorized', 'statusCode': 401}),
         ),
       );
-      final service = AuthService(dio: dio);
+      final dataSource = AuthRemoteDataSource(dio: dio);
 
       expect(
-        () => service.login(email: 'john@mail.com', password: 'wrong'),
+        () => dataSource.login(email: 'john@mail.com', password: 'wrong'),
         throwsA(
-          isA<AuthException>()
+          isA<ApiException>()
+              .having((e) => e.kind, 'kind', ApiErrorKind.response)
               .having((e) => e.statusCode, 'status', 401)
               .having(
                 (e) => e.message,
@@ -230,11 +342,11 @@ void main() {
               server.reply(401, {'message': 'Unauthorized', 'statusCode': 401}),
         ),
       );
-      final service = AuthService(dio: dio);
+      final dataSource = AuthRemoteDataSource(dio: dio);
 
       expect(
-        () => service.login(email: 'ghost_xyz@mail.com', password: '123456'),
-        throwsA(isA<AuthException>()),
+        () => dataSource.login(email: 'ghost_xyz@mail.com', password: '123456'),
+        throwsA(isA<ApiException>()),
       );
     });
 
@@ -247,14 +359,12 @@ void main() {
       );
       await expectLater(
         () =>
-            AuthService(dio: networkDio)
+            AuthRemoteDataSource(dio: networkDio)
                 .login(email: 'a@b.com', password: '123456'),
         throwsA(
-          isA<AuthException>().having(
-            (e) => e.message,
-            'message',
-            contains('No internet'),
-          ),
+          isA<ApiException>()
+              .having((e) => e.kind, 'kind', ApiErrorKind.network)
+              .having((e) => e.message, 'message', contains('No internet')),
         ),
       );
 
@@ -266,14 +376,12 @@ void main() {
       );
       await expectLater(
         () =>
-            AuthService(dio: timeoutDio)
+            AuthRemoteDataSource(dio: timeoutDio)
                 .login(email: 'a@b.com', password: '123456'),
         throwsA(
-          isA<AuthException>().having(
-            (e) => e.message,
-            'message',
-            contains('timed out'),
-          ),
+          isA<ApiException>()
+              .having((e) => e.kind, 'kind', ApiErrorKind.timeout)
+              .having((e) => e.message, 'message', contains('timed out')),
         ),
       );
     });
@@ -286,13 +394,21 @@ void main() {
         ),
       );
       expect(
-        () => AuthService(dio: dio).login(email: 'a@b.com', password: '123456'),
-        throwsA(isA<AuthException>()),
+        () =>
+            AuthRemoteDataSource(dio: dio)
+                .login(email: 'a@b.com', password: '123456'),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.kind,
+            'kind',
+            ApiErrorKind.unknown,
+          ),
+        ),
       );
     });
   });
 
-  group('AuthService profile & refresh', () {
+  group('AuthRemoteDataSource profile & refresh', () {
     test('getProfile returns the user', () async {
       final dio = _buildDio(
         (d) => DioAdapter(dio: d, matcher: const UrlRequestMatcher()).onGet(
@@ -300,7 +416,8 @@ void main() {
           (server) => server.reply(200, _testUserJson),
         ),
       );
-      final user = await AuthService(dio: dio).getProfile('test-access-token');
+      final user = await AuthRemoteDataSource(dio: dio)
+          .getProfile('test-access-token');
       expect(user.id, 1);
     });
 
@@ -313,9 +430,10 @@ void main() {
         ),
       );
       await expectLater(
-        () => AuthService(dio: dio).getProfile('expired'),
+        () => AuthRemoteDataSource(dio: dio).getProfile('expired'),
         throwsA(
-          isA<AuthException>()
+          isA<ApiException>()
+              .having((e) => e.kind, 'kind', ApiErrorKind.response)
               .having((e) => e.statusCode, 'status', 401)
               .having((e) => e.message, 'message', contains('Session expired')),
         ),
@@ -329,7 +447,7 @@ void main() {
           (server) => server.reply(201, _refreshedTokensJson),
         ),
       );
-      final tokens = await AuthService(dio: dio)
+      final tokens = await AuthRemoteDataSource(dio: dio)
           .refreshToken('test-refresh-token');
       expect(tokens.accessToken, 'new-access-token');
     });
@@ -347,11 +465,8 @@ void main() {
         ApiConstants.profile,
         (server) => server.reply(200, _testUserJson),
       );
-      final storage = InMemoryAuthStorage();
-      final session = AuthSession(
-        authService: AuthService(dio: dio),
-        storage: storage,
-      );
+      final local = InMemoryAuthLocalDataSource();
+      final session = _sessionWith(_repoWith(dio, local));
 
       final user = await session.login(
         email: 'john@mail.com',
@@ -360,8 +475,8 @@ void main() {
       expect(user.email, 'john@mail.com');
       expect(session.currentUser?.email, 'john@mail.com');
       expect(session.isAuthenticated, isTrue);
-      expect(await storage.readAccessToken(), 'test-access-token');
-      expect(await storage.readRefreshToken(), 'test-refresh-token');
+      expect(await local.readAccessToken(), 'test-access-token');
+      expect(await local.readRefreshToken(), 'test-refresh-token');
     });
 
     test('concurrent login attempts are rejected', () async {
@@ -379,22 +494,21 @@ void main() {
         ApiConstants.profile,
         (server) => server.reply(200, _testUserJson),
       );
-      final session = AuthSession(
-        authService: AuthService(dio: dio),
-        storage: InMemoryAuthStorage(),
+      final session = _sessionWith(
+        _repoWith(dio, InMemoryAuthLocalDataSource()),
       );
 
       final first = session.login(email: 'john@mail.com', password: 'changeme');
       await expectLater(
         session.login(email: 'john@mail.com', password: 'changeme'),
-        throwsA(isA<AuthException>()),
+        throwsA(isA<AppFailure>()),
       );
       await first;
     });
 
     test('restoreSession returns user when tokens are valid', () async {
-      final storage = InMemoryAuthStorage();
-      await storage.saveSession(
+      final local = InMemoryAuthLocalDataSource();
+      await local.saveSession(
         accessToken: 'test-access-token',
         refreshToken: 'test-refresh-token',
       );
@@ -403,10 +517,7 @@ void main() {
         ApiConstants.profile,
         (server) => server.reply(200, _testUserJson),
       );
-      final session = AuthSession(
-        authService: AuthService(dio: dio),
-        storage: storage,
-      );
+      final session = _sessionWith(_repoWith(dio, local));
 
       final user = await session.restoreSession();
       expect(user?.email, 'john@mail.com');
@@ -414,24 +525,34 @@ void main() {
     });
 
     test('restoreSession refreshes an expired access token', () async {
-      final storage = InMemoryAuthStorage();
-      await storage.saveSession(
+      final repo = FakeAuthRepository();
+      var profileCalls = 0;
+      repo.profileHandler = (accessToken) async {
+        profileCalls++;
+        if (profileCalls == 1) {
+          throw const UnauthorizedFailure(
+            'Session expired. Please log in again.',
+            statusCode: 401,
+          );
+        }
+        return FakeAuthRepository.testUser;
+      };
+      repo.refreshHandler = (_) async => FakeAuthRepository.refreshedTokens;
+      await repo.saveSession(
         accessToken: 'expired',
         refreshToken: 'test-refresh-token',
       );
-      final session = AuthSession(
-        authService: _ExpiringThenValidAuthService(),
-        storage: storage,
-      );
+      final session = _sessionWith(repo);
 
       final user = await session.restoreSession();
       expect(user?.email, 'john@mail.com');
-      expect(await storage.readAccessToken(), 'new-access-token');
+      expect(repo.storedAccessToken, 'new-access-token');
+      expect(repo.calls.where((c) => c == 'refreshToken'), hasLength(1));
     });
 
     test('restoreSession clears storage when refresh fails', () async {
-      final storage = InMemoryAuthStorage();
-      await storage.saveSession(
+      final local = InMemoryAuthLocalDataSource();
+      await local.saveSession(
         accessToken: 'expired',
         refreshToken: 'bad-refresh',
       );
@@ -447,52 +568,87 @@ void main() {
         (server) =>
             server.reply(401, {'message': 'Unauthorized', 'statusCode': 401}),
       );
-      final session = AuthSession(
-        authService: AuthService(dio: dio),
-        storage: storage,
-      );
+      final session = _sessionWith(_repoWith(dio, local));
 
       expect(await session.restoreSession(), isNull);
-      expect(await storage.hasSession(), isFalse);
+      expect(await local.hasSession(), isFalse);
       expect(session.isAuthenticated, isFalse);
     });
 
+    test(
+      'restoreSession preserves stored credentials when offline (reliability)',
+      () async {
+        final repo = FakeAuthRepository();
+        repo.profileHandler = (_) async {
+          throw const NetworkFailure();
+        };
+        await repo.saveSession(
+          accessToken: 'test-access-token',
+          refreshToken: 'test-refresh-token',
+        );
+        final session = _sessionWith(repo);
+
+        expect(await session.restoreSession(), isNull);
+        // Valid credentials must NOT be deleted merely because the device
+        // is offline.
+        expect(repo.cleared, isFalse);
+        expect(repo.storedAccessToken, 'test-access-token');
+        expect(repo.storedRefreshToken, 'test-refresh-token');
+        expect(session.isAuthenticated, isFalse);
+      },
+    );
+
+    test(
+      'restoreSession preserves stored credentials on refresh timeout',
+      () async {
+        final repo = FakeAuthRepository();
+        var profileCalls = 0;
+        repo.profileHandler = (_) async {
+          profileCalls++;
+          if (profileCalls == 1) {
+            throw const UnauthorizedFailure(
+              'Session expired. Please log in again.',
+              statusCode: 401,
+            );
+          }
+          return FakeAuthRepository.testUser;
+        };
+        repo.refreshHandler = (_) async {
+          throw const TimeoutFailure();
+        };
+        await repo.saveSession(
+          accessToken: 'expired',
+          refreshToken: 'test-refresh-token',
+        );
+        final session = _sessionWith(repo);
+
+        expect(await session.restoreSession(), isNull);
+        expect(repo.cleared, isFalse);
+        expect(repo.storedRefreshToken, 'test-refresh-token');
+      },
+    );
+
     test('restoreSession returns null with no stored session', () async {
-      final session = AuthSession(
-        authService: AuthService(
-          dio: Dio(BaseOptions(baseUrl: ApiConstants.baseApiUrl)),
-        ),
-        storage: InMemoryAuthStorage(),
-      );
+      final session = _sessionWith(FakeAuthRepository());
       expect(await session.restoreSession(), isNull);
     });
 
     test('logout clears credentials', () async {
-      final storage = InMemoryAuthStorage();
-      await storage.saveSession(accessToken: 'a', refreshToken: 'r');
-      final session = AuthSession(
-        authService: AuthService(
-          dio: Dio(BaseOptions(baseUrl: ApiConstants.baseApiUrl)),
-        ),
-        storage: storage,
-      );
+      final local = InMemoryAuthLocalDataSource();
+      await local.saveSession(accessToken: 'a', refreshToken: 'r');
       // Simulate a logged-in user via a successful restore first.
       final dio = Dio(BaseOptions(baseUrl: ApiConstants.baseApiUrl));
       DioAdapter(dio: dio, matcher: const UrlRequestMatcher()).onGet(
         ApiConstants.profile,
         (server) => server.reply(200, _testUserJson),
       );
-      final loggedIn = AuthSession(
-        authService: AuthService(dio: dio),
-        storage: storage,
-      );
+      final loggedIn = _sessionWith(_repoWith(dio, local));
       await loggedIn.restoreSession();
       expect(loggedIn.isAuthenticated, isTrue);
 
       await loggedIn.logout();
-      expect(await storage.hasSession(), isFalse);
+      expect(await local.hasSession(), isFalse);
       expect(loggedIn.isAuthenticated, isFalse);
-      expect(session.isAuthenticated, isFalse);
     });
   });
 
@@ -570,8 +726,8 @@ void main() {
       });
     });
 
-    test('InMemoryAuthStorage round-trip', () async {
-      final storage = InMemoryAuthStorage();
+    test('InMemoryAuthLocalDataSource round-trip', () async {
+      final storage = InMemoryAuthLocalDataSource();
       expect(await storage.hasSession(), isFalse);
       await storage.saveSession(accessToken: 'a', refreshToken: 'r');
       expect(await storage.hasSession(), isTrue);
@@ -591,10 +747,7 @@ void main() {
             server.reply(401, {'message': 'Unauthorized', 'statusCode': 401}),
       );
       AuthSession.debugSetInstance(
-        AuthSession(
-          authService: AuthService(dio: dio),
-          storage: InMemoryAuthStorage(),
-        ),
+        _sessionWith(_repoWith(dio, InMemoryAuthLocalDataSource())),
       );
 
       await tester.pumpWidget(const MaterialApp(home: LoginScreen()));
@@ -627,10 +780,7 @@ void main() {
       // Any request would fail the test; no mock is registered on purpose.
       DioAdapter(dio: dio, matcher: const UrlRequestMatcher());
       AuthSession.debugSetInstance(
-        AuthSession(
-          authService: AuthService(dio: dio),
-          storage: InMemoryAuthStorage(),
-        ),
+        _sessionWith(_repoWith(dio, InMemoryAuthLocalDataSource())),
       );
 
       await tester.pumpWidget(const MaterialApp(home: LoginScreen()));
@@ -647,10 +797,7 @@ void main() {
       final dio = Dio(BaseOptions(baseUrl: ApiConstants.baseApiUrl));
       DioAdapter(dio: dio, matcher: const UrlRequestMatcher());
       AuthSession.debugSetInstance(
-        AuthSession(
-          authService: AuthService(dio: dio),
-          storage: InMemoryAuthStorage(),
-        ),
+        _sessionWith(_repoWith(dio, InMemoryAuthLocalDataSource())),
       );
 
       for (final screen in [const LoginScreen(), const SignUpScreen()]) {
@@ -681,10 +828,7 @@ void main() {
         (server) => server.reply(201, _testUserJson),
       );
       AuthSession.debugSetInstance(
-        AuthSession(
-          authService: AuthService(dio: dio),
-          storage: InMemoryAuthStorage(),
-        ),
+        _sessionWith(_repoWith(dio, InMemoryAuthLocalDataSource())),
       );
 
       await tester.pumpWidget(const MaterialApp(home: SignUpScreen()));

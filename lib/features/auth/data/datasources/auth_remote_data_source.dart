@@ -1,20 +1,20 @@
-import 'dart:async';
-import 'dart:io';
-
 import 'package:dio/dio.dart';
 
+import '../../../../core/error/api_exception.dart';
+import '../../../../core/error/dio_error_parser.dart';
 import '../../../../core/network/api_constants.dart';
 import '../../../../core/network/dio_client.dart';
-import '../auth_exception.dart';
 import '../models/auth_models.dart';
 import '../models/user_model.dart';
 
-/// Thin HTTP layer for authentication. No UI logic here; errors are mapped
-/// to [AuthException] with user-friendly messages.
-class AuthService {
+/// Authentication HTTP calls. Returns DTOs, never domain entities, and
+/// throws [ApiException] (never raw `DioException`) with endpoint-specific,
+/// user-friendly messages. Repository implementations translate these into
+/// typed domain failures.
+class AuthRemoteDataSource {
   final Dio _dio;
 
-  AuthService({Dio? dio}) : _dio = dio ?? DioClient.create();
+  AuthRemoteDataSource({Dio? dio}) : _dio = dio ?? DioClient.create();
 
   /// `POST /users` — creates a new account.
   ///
@@ -41,19 +41,23 @@ class AuthService {
       );
       final data = response.data;
       if (data == null) {
-        throw const AuthException('Registration failed. Please try again.');
+        throw const ApiException.unknown(
+          'Registration failed. Please try again.',
+        );
       }
       return UserModel.fromJson(Map<String, dynamic>.from(data));
     } on DioException catch (e) {
       throw _mapSignUpError(e);
-    } on AuthException {
+    } on ApiException {
       rethrow;
     } catch (_) {
-      throw const AuthException('Registration failed. Please try again.');
+      throw const ApiException.unknown(
+        'Registration failed. Please try again.',
+      );
     }
   }
 
-  /// `POST /auth/login` — authenticates and returns token pair.
+  /// `POST /auth/login` — authenticates and returns the token pair.
   Future<AuthTokens> login({
     required String email,
     required String password,
@@ -66,19 +70,21 @@ class AuthService {
       );
       final data = response.data;
       if (data == null) {
-        throw const AuthException('Login failed. Please try again.');
+        throw const ApiException.unknown('Login failed. Please try again.');
       }
       try {
         return AuthTokens.fromJson(Map<String, dynamic>.from(data));
       } on FormatException {
-        throw const AuthException('Login failed. Unexpected server response.');
+        throw const ApiException.unknown(
+          'Login failed. Unexpected server response.',
+        );
       }
     } on DioException catch (e) {
       throw _mapLoginError(e);
-    } on AuthException {
+    } on ApiException {
       rethrow;
     } catch (_) {
-      throw const AuthException('Login failed. Please try again.');
+      throw const ApiException.unknown('Login failed. Please try again.');
     }
   }
 
@@ -91,18 +97,17 @@ class AuthService {
       );
       final data = response.data;
       if (data == null) {
-        throw const AuthException(
+        throw const ApiException.unknown(
           'Could not load your profile. Please try again.',
-          statusCode: 500,
         );
       }
       return UserModel.fromJson(Map<String, dynamic>.from(data));
     } on DioException catch (e) {
       throw _mapProfileError(e);
-    } on AuthException {
+    } on ApiException {
       rethrow;
     } catch (_) {
-      throw const AuthException(
+      throw const ApiException.unknown(
         'Could not load your profile. Please try again.',
       );
     }
@@ -117,25 +122,25 @@ class AuthService {
       );
       final data = response.data;
       if (data == null) {
-        throw const AuthException(
+        throw const ApiException.response(
+          401,
           'Session expired. Please log in again.',
-          statusCode: 401,
         );
       }
       try {
         return AuthTokens.fromJson(Map<String, dynamic>.from(data));
       } on FormatException {
-        throw const AuthException(
+        throw const ApiException.response(
+          401,
           'Session expired. Please log in again.',
-          statusCode: 401,
         );
       }
     } on DioException catch (e) {
       throw _mapRefreshError(e);
-    } on AuthException {
+    } on ApiException {
       rethrow;
     } catch (_) {
-      throw const AuthException('Session expired. Please log in again.');
+      throw const ApiException.unknown('Session expired. Please log in again.');
     }
   }
 
@@ -163,174 +168,150 @@ class AuthService {
     }
   }
 
-  // -- error mapping -------------------------------------------------------
+  // -- error mapping (messages preserved from the previous implementation) --
 
-  AuthException _mapSignUpError(DioException e) {
-    final status = e.response?.statusCode;
-    if (_isTimeout(e)) {
-      return const AuthException(
+  ApiException _mapSignUpError(DioException e) {
+    final status = dioStatusCode(e);
+    if (isTimeoutError(e)) {
+      return const ApiException.timeout(
         'Connection timed out. Please check your internet and try again.',
       );
     }
-    if (_isNetworkError(e)) {
-      return const AuthException(
+    if (isNetworkError(e)) {
+      return const ApiException.network(
         'No internet connection. Please check your network and try again.',
       );
     }
     if (status == 400) {
-      return AuthException(
-        _backendMessage(
-          e,
-          'Registration failed. '
-          'Please check your details and try again.',
-        ),
+      return ApiException.response(
+        status,
+        dioBackendMessage(e) ??
+            'Registration failed. '
+                'Please check your details and try again.',
       );
     }
     if (status == 409) {
-      return const AuthException(
+      return const ApiException.response(
+        409,
         'This email is already registered. Please log in instead.',
-        statusCode: 409,
       );
     }
     if (status != null && status >= 500) {
-      return const AuthException('Server error. Please try again later.');
+      return ApiException.response(
+        status,
+        'Server error. Please try again later.',
+      );
     }
-    final backend = _backendMessageOrNull(e);
+    final backend = dioBackendMessage(e);
     if (backend != null) {
       // The API currently allows duplicate emails (returns 201), but if a
       // future version rejects them, surface it clearly.
       if (backend.toLowerCase().contains('already') ||
           backend.toLowerCase().contains('duplicate') ||
           backend.toLowerCase().contains('unique')) {
-        return AuthException(
+        return ApiException.response(
+          status,
           'This email is already registered. Please log in instead.',
-          statusCode: status,
         );
       }
-      return AuthException(backend, statusCode: status);
+      return ApiException.response(status, backend);
     }
-    return AuthException(
+    return ApiException.response(
+      status,
       'Registration failed. Please try again.',
-      statusCode: status,
     );
   }
 
-  AuthException _mapLoginError(DioException e) {
-    final status = e.response?.statusCode;
-    if (_isTimeout(e)) {
-      return const AuthException(
+  ApiException _mapLoginError(DioException e) {
+    final status = dioStatusCode(e);
+    if (isTimeoutError(e)) {
+      return const ApiException.timeout(
         'Connection timed out. Please check your internet and try again.',
       );
     }
-    if (_isNetworkError(e)) {
-      return const AuthException(
+    if (isNetworkError(e)) {
+      return const ApiException.network(
         'No internet connection. Please check your network and try again.',
       );
     }
     if (status == 400) {
-      return AuthException(
-        _backendMessage(e, 'Invalid email or password. Please try again.'),
-        statusCode: 400,
+      return ApiException.response(
+        400,
+        dioBackendMessage(e) ?? 'Invalid email or password. Please try again.',
       );
     }
     if (status == 401) {
-      return const AuthException(
+      return const ApiException.response(
+        401,
         'Incorrect email or password. Please try again.',
-        statusCode: 401,
       );
     }
     if (status != null && status >= 500) {
-      return const AuthException('Server error. Please try again later.');
+      return ApiException.response(
+        status,
+        'Server error. Please try again later.',
+      );
     }
-    final backend = _backendMessageOrNull(e);
-    if (backend != null) return AuthException(backend, statusCode: status);
-    return AuthException('Login failed. Please try again.', statusCode: status);
+    final backend = dioBackendMessage(e);
+    if (backend != null) return ApiException.response(status, backend);
+    return ApiException.response(status, 'Login failed. Please try again.');
   }
 
-  AuthException _mapProfileError(DioException e) {
-    final status = e.response?.statusCode;
-    if (_isTimeout(e)) {
-      return const AuthException(
+  ApiException _mapProfileError(DioException e) {
+    final status = dioStatusCode(e);
+    if (isTimeoutError(e)) {
+      return const ApiException.timeout(
         'Connection timed out while loading your profile.',
       );
     }
-    if (_isNetworkError(e)) {
-      return const AuthException(
+    if (isNetworkError(e)) {
+      return const ApiException.network(
         'No internet connection. Please check your network and try again.',
       );
     }
     if (status == 401) {
-      return const AuthException(
+      return const ApiException.response(
+        401,
         'Session expired. Please log in again.',
-        statusCode: 401,
       );
     }
-    final backend = _backendMessageOrNull(e);
-    if (backend != null) return AuthException(backend, statusCode: status);
-    return AuthException(
+    final backend = dioBackendMessage(e);
+    if (backend != null) return ApiException.response(status, backend);
+    return ApiException.response(
+      status,
       'Could not load your profile. Please try again.',
-      statusCode: status,
     );
   }
 
-  AuthException _mapRefreshError(DioException e) {
-    if (_isTimeout(e) || _isNetworkError(e)) {
-      return const AuthException(
+  ApiException _mapRefreshError(DioException e) {
+    if (isTimeoutError(e) || isNetworkError(e)) {
+      // Connectivity problems carry no status: stored credentials must be
+      // preserved (see RestoreSessionUseCase), never treated as revoked.
+      return const ApiException.network(
         'No internet connection. Please check your network and try again.',
       );
     }
-    return AuthException(
-      _backendMessageOrNull(e) ?? 'Session expired. Please log in again.',
-      statusCode: e.response?.statusCode ?? 401,
+    final status = dioStatusCode(e);
+    return ApiException.response(
+      status,
+      dioBackendMessage(e) ?? 'Session expired. Please log in again.',
     );
   }
 
-  AuthException _mapNetworkError(DioException e, {required String fallback}) {
-    if (_isTimeout(e)) {
-      return const AuthException(
+  ApiException _mapNetworkError(DioException e, {required String fallback}) {
+    if (isTimeoutError(e)) {
+      return const ApiException.timeout(
         'Connection timed out. Please check your internet and try again.',
       );
     }
-    if (_isNetworkError(e)) {
-      return const AuthException(
+    if (isNetworkError(e)) {
+      return const ApiException.network(
         'No internet connection. Please check your network and try again.',
       );
     }
-    final backend = _backendMessageOrNull(e);
-    return AuthException(
-      backend ?? fallback,
-      statusCode: e.response?.statusCode,
+    return ApiException.response(
+      dioStatusCode(e),
+      dioBackendMessage(e) ?? fallback,
     );
-  }
-
-  bool _isTimeout(DioException e) {
-    return e.type == DioExceptionType.connectionTimeout ||
-        e.type == DioExceptionType.sendTimeout ||
-        e.type == DioExceptionType.receiveTimeout ||
-        e is TimeoutException;
-  }
-
-  bool _isNetworkError(DioException e) {
-    return e.type == DioExceptionType.connectionError ||
-        e.type == DioExceptionType.unknown ||
-        e.error is SocketException;
-  }
-
-  String? _backendMessageOrNull(DioException e) {
-    final data = e.response?.data;
-    if (data is Map) {
-      final message = data['message'];
-      if (message is String && message.trim().isNotEmpty) return message;
-      if (message is List && message.isNotEmpty) {
-        return message.map((m) => m.toString()).join('\n');
-      }
-    } else if (data is String && data.trim().isNotEmpty) {
-      return data;
-    }
-    return null;
-  }
-
-  String _backendMessage(DioException e, String fallback) {
-    return _backendMessageOrNull(e) ?? fallback;
   }
 }

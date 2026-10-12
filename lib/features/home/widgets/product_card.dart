@@ -1,12 +1,31 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/dummy_data.dart' show Product;
 import '../../../core/theme.dart';
 import '../../../core/widgets/app_network_image.dart';
 import '../../details/screens/product_details_screen.dart';
-import '../data/models/product_model.dart';
+import '../domain/entities/product_entity.dart';
+
+/// Presentation-boundary adapter: the legacy [ProductDetailsScreen]/Cart
+/// still operate on the UI [Product] type, so the domain entity is mapped
+/// here — never inside Domain or Data. Variants stay empty because the
+/// backend provides none; the details screen hides empty selectors.
+extension ProductEntityCompat on ProductEntity {
+  Product toProduct() {
+    return Product(
+      id: '$id',
+      name: title,
+      description: description,
+      price: price,
+      imageUrl: primaryImage,
+      colors: const [],
+      sizes: const [],
+    );
+  }
+}
 
 class ProductCard extends StatelessWidget {
-  final ProductModel product;
+  final ProductEntity product;
 
   const ProductCard({super.key, required this.product});
 

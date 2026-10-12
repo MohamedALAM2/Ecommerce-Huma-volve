@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/error/app_failure.dart';
 import '../../../../core/theme.dart';
 import '../../../../core/validators.dart';
 import '../../../../core/widgets/custom_text_field.dart';
 import '../../../../core/widgets/primary_button.dart';
 import '../../session/auth_session.dart';
-import '../../data/auth_exception.dart';
 import '../../login/screens/login_screen.dart';
 
 class SignUpScreen extends StatefulWidget {
@@ -64,7 +64,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
         context,
         MaterialPageRoute(builder: (context) => const LoginScreen()),
       );
-    } on AuthException catch (e) {
+    } on AppFailure catch (e) {
       if (!mounted) return;
       setState(() => _errorMessage = e.message);
     } catch (_) {

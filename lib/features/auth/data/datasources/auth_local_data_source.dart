@@ -1,10 +1,11 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-/// Minimal secure persistence for authentication tokens.
+/// Local persistence contract for authentication tokens.
 ///
-/// Only tokens (and the cached user id/email for convenience) are stored.
-/// Passwords are never persisted.
-abstract class AuthStorage {
+/// Only tokens are stored — never raw passwords. Implemented with
+/// `flutter_secure_storage` in production; the repository depends on this
+/// abstraction, never on the plugin directly.
+abstract class AuthLocalDataSource {
   Future<void> saveSession({
     required String accessToken,
     required String refreshToken,
@@ -17,13 +18,13 @@ abstract class AuthStorage {
 }
 
 /// Production implementation backed by flutter_secure_storage.
-class SecureAuthStorage implements AuthStorage {
+class SecureAuthLocalDataSource implements AuthLocalDataSource {
   static const String _accessTokenKey = 'auth_access_token';
   static const String _refreshTokenKey = 'auth_refresh_token';
 
   final FlutterSecureStorage _storage;
 
-  SecureAuthStorage({FlutterSecureStorage? storage})
+  SecureAuthLocalDataSource({FlutterSecureStorage? storage})
     : _storage = storage ?? const FlutterSecureStorage();
 
   @override
@@ -58,8 +59,8 @@ class SecureAuthStorage implements AuthStorage {
   }
 }
 
-/// In-memory storage for widget/unit tests (no platform channels needed).
-class InMemoryAuthStorage implements AuthStorage {
+/// In-memory implementation for unit/widget tests (no platform channels).
+class InMemoryAuthLocalDataSource implements AuthLocalDataSource {
   String? _accessToken;
   String? _refreshToken;
 

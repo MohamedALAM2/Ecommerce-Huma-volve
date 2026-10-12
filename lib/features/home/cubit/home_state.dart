@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 
-import '../data/models/category_model.dart';
-import '../data/models/product_model.dart';
+import '../domain/entities/category_entity.dart';
+import '../domain/entities/product_entity.dart';
 
 /// Products-section status. Category selection and the category list are
 /// separate fields so the selection stays visible while products load.
@@ -10,11 +10,11 @@ enum HomeStatus { initial, loading, success, empty, failure }
 @immutable
 class HomeState {
   final HomeStatus status;
-  final List<CategoryModel> categories;
+  final List<CategoryEntity> categories;
 
   /// `null` means the virtual "All" category is selected.
   final int? selectedCategoryId;
-  final List<ProductModel> products;
+  final List<ProductEntity> products;
   final String searchQuery;
   final bool isLoadingMore;
   final bool hasMore;
@@ -52,9 +52,9 @@ class HomeState {
 
   HomeState copyWith({
     HomeStatus? status,
-    List<CategoryModel>? categories,
+    List<CategoryEntity>? categories,
     int? Function()? selectedCategoryId,
-    List<ProductModel>? products,
+    List<ProductEntity>? products,
     String? searchQuery,
     bool? isLoadingMore,
     bool? hasMore,

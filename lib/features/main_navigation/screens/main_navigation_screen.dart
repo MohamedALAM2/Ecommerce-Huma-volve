@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../../core/network/dio_client.dart';
+import '../../../core/di/app_scope.dart';
 import '../../../core/theme.dart';
 import '../../home/cubit/home_cubit.dart';
-import '../../home/data/repositories/home_repository.dart';
 import '../../home/screens/home_screen.dart';
 import '../../cart/screens/cart_screen.dart';
 import '../../profile/screens/profile_screen.dart';
@@ -33,7 +32,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   @override
   void initState() {
     super.initState();
-    _homeCubit = HomeCubit(HomeRepository(DioClient.create()));
+    // Resolved from the composition root: Presentation no longer depends on
+    // concrete Data implementations (Dio/repository construction).
+    _homeCubit = AppScope.read(context).createHomeCubit();
   }
 
   @override

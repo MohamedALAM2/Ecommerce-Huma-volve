@@ -1,4 +1,7 @@
-/// User profile model returned by `POST /users` and `GET /auth/profile`.
+import '../../domain/entities/user_entity.dart';
+
+/// User profile model (DTO) returned by `POST /users` and
+/// `GET /auth/profile`.
 class UserModel {
   final int id;
   final String email;
@@ -32,6 +35,17 @@ class UserModel {
       'role': role,
       'avatar': avatar,
     };
+  }
+
+  /// Maps this DTO to the domain entity at the Data/Domain boundary.
+  UserEntity toEntity() {
+    return UserEntity(
+      id: id,
+      email: email,
+      name: name,
+      role: role,
+      avatar: avatar,
+    );
   }
 
   static int _asInt(dynamic value) {

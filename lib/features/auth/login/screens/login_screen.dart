@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/error/app_failure.dart';
 import '../../../../core/theme.dart';
 import '../../../../core/validators.dart';
 import '../../../../core/widgets/custom_text_field.dart';
@@ -7,7 +8,6 @@ import '../../../../core/widgets/primary_button.dart';
 import '../../session/auth_session.dart';
 import '../../../main_navigation/screens/main_navigation_screen.dart';
 import '../../sign_up/screens/sign_up_screen.dart';
-import '../../data/auth_exception.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -53,7 +53,7 @@ class _LoginScreenState extends State<LoginScreen> {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (context) => const MainNavigationScreen()),
       );
-    } on AuthException catch (e) {
+    } on AppFailure catch (e) {
       if (!mounted) return;
       setState(() => _errorMessage = e.message);
     } catch (_) {

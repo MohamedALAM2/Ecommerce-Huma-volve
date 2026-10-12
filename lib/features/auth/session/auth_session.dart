@@ -1,36 +1,49 @@
 import 'package:flutter/foundation.dart';
 
+import '../../../core/error/app_failure.dart';
+import '../domain/entities/user_entity.dart';
+import '../domain/usecases/login_usecase.dart';
+import '../domain/usecases/logout_usecase.dart';
+import '../domain/usecases/restore_session_usecase.dart';
+import '../domain/usecases/signup_usecase.dart';
+
 // ignore_for_file: prefer_initializing_formals
 
-import '../data/auth_exception.dart';
-import '../data/models/auth_models.dart';
-import '../data/models/user_model.dart';
-import '../data/services/auth_service.dart';
-import '../data/services/auth_storage.dart';
-
-/// Lightweight session manager: owns tokens + current user, restores the
-/// session on app start, refreshes expired access tokens once, and clears
-/// everything on logout.
+/// Application/session orchestration for authentication.
 ///
-/// Screens call this (never Dio directly) so HTTP stays out of widgets.
+/// Depends ONLY on domain use cases — never on Dio, data sources, concrete
+/// repositories, or storage plugins. Screens call this (never infrastructure
+/// directly) so layer boundaries stay intact.
+///
+/// Retained as a ChangeNotifier singleton (rather than migrating Auth to
+/// Cubit) because its observable behavior, navigation integration, and tests
+/// already work; the refactor only swapped its dependencies to abstractions.
 class AuthSession extends ChangeNotifier {
-  final AuthService _authService;
-  final AuthStorage _storage;
+  final SignUpUseCase _signUp;
+  final LoginUseCase _login;
+  final RestoreSessionUseCase _restoreSession;
+  final LogoutUseCase _logout;
 
-  UserModel? _currentUser;
+  UserEntity? _currentUser;
   String? _accessToken;
   String? _refreshToken;
   bool _isAuthenticating = false;
 
-  AuthSession({required AuthService authService, required AuthStorage storage})
-    : _authService = authService,
-      _storage = storage;
+  AuthSession({
+    required SignUpUseCase signUp,
+    required LoginUseCase login,
+    required RestoreSessionUseCase restoreSession,
+    required LogoutUseCase logout,
+  }) : _signUp = signUp,
+       _login = login,
+       _restoreSession = restoreSession,
+       _logout = logout;
 
   // Singleton used by the UI so navigation can stay unchanged
   // (screens use `pushReplacement` with const constructors).
   static AuthSession? _instance;
 
-  /// The shared instance, initialised in `main()`.
+  /// The shared instance, initialised in `main()` via the DI container.
   static AuthSession get instance {
     final current = _instance;
     if (current == null) {
@@ -43,10 +56,17 @@ class AuthSession extends ChangeNotifier {
 
   /// Initialises (or replaces, e.g. in tests) the shared instance.
   static AuthSession init({
-    required AuthService authService,
-    required AuthStorage storage,
+    required SignUpUseCase signUp,
+    required LoginUseCase login,
+    required RestoreSessionUseCase restoreSession,
+    required LogoutUseCase logout,
   }) {
-    _instance = AuthSession(authService: authService, storage: storage);
+    _instance = AuthSession(
+      signUp: signUp,
+      login: login,
+      restoreSession: restoreSession,
+      logout: logout,
+    );
     return _instance!;
   }
 
@@ -56,7 +76,7 @@ class AuthSession extends ChangeNotifier {
     _instance = session;
   }
 
-  UserModel? get currentUser => _currentUser;
+  UserEntity? get currentUser => _currentUser;
   String? get accessToken => _accessToken;
   // Exposed for session validity checks; never log this value.
   String? get refreshToken => _refreshToken;
@@ -65,99 +85,63 @@ class AuthSession extends ChangeNotifier {
 
   /// Attempts a fresh registration. Does not log the user in; the caller
   /// navigates to Login on success.
-  Future<UserModel> signUp({
+  Future<UserEntity> signUp({
     required String name,
     required String email,
     required String password,
   }) {
-    return _authService.signUp(name: name, email: email, password: password);
+    return _signUp(name: name, email: email, password: password);
   }
 
-  /// Full login flow: `POST /auth/login` then `GET /auth/profile`, then
-  /// persist tokens. Throws [AuthException] with a displayable message.
-  /// Guards against concurrent calls.
-  Future<UserModel> login({
+  /// Full login flow (delegated to [LoginUseCase], which authenticates,
+  /// fetches the profile, and persists tokens). Throws [AppFailure] with a
+  /// displayable message. Guards against concurrent calls.
+  Future<UserEntity> login({
     required String email,
     required String password,
   }) async {
     if (_isAuthenticating) {
-      throw const AuthException('Please wait, authentication is in progress.');
+      throw const UnexpectedFailure(
+        'Please wait, authentication is in progress.',
+      );
     }
     _isAuthenticating = true;
     notifyListeners();
     try {
-      final AuthTokens tokens = await _authService.login(
-        email: email,
-        password: password,
-      );
-      final UserModel user = await _authService.getProfile(tokens.accessToken);
-      _accessToken = tokens.accessToken;
-      _refreshToken = tokens.refreshToken;
-      _currentUser = user;
-      await _storage.saveSession(
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-      );
-      return user;
+      final result = await _login(email: email, password: password);
+      _accessToken = result.tokens.accessToken;
+      _refreshToken = result.tokens.refreshToken;
+      _currentUser = result.user;
+      return result.user;
     } finally {
       _isAuthenticating = false;
       notifyListeners();
     }
   }
 
-  /// Restores a previous session: reads stored tokens, validates them with
-  /// `GET /auth/profile`, and tries one refresh if the access token expired.
-  /// Returns the user on success, `null` when no valid session exists.
-  Future<UserModel?> restoreSession() async {
-    final storedAccess = await _storage.readAccessToken();
-    final storedRefresh = await _storage.readRefreshToken();
-    if (storedAccess == null ||
-        storedAccess.isEmpty ||
-        storedRefresh == null ||
-        storedRefresh.isEmpty) {
-      return null;
-    }
-    try {
-      final user = await _authService.getProfile(storedAccess);
-      _accessToken = storedAccess;
-      _refreshToken = storedRefresh;
-      _currentUser = user;
+  /// Restores a previous session via [RestoreSessionUseCase]. Returns the
+  /// user on success, `null` when no valid session exists.
+  Future<UserEntity?> restoreSession() async {
+    final session = await _restoreSession();
+    if (session != null) {
+      _accessToken = session.tokens.accessToken;
+      _refreshToken = session.tokens.refreshToken;
+      _currentUser = session.user;
       notifyListeners();
-      return user;
-    } on AuthException catch (e) {
-      if (e.statusCode == 401) {
-        // Access token expired/invalid — try the refresh token once.
-        try {
-          final AuthTokens fresh = await _authService.refreshToken(
-            storedRefresh,
-          );
-          final user = await _authService.getProfile(fresh.accessToken);
-          _accessToken = fresh.accessToken;
-          _refreshToken = fresh.refreshToken;
-          _currentUser = user;
-          await _storage.saveSession(
-            accessToken: fresh.accessToken,
-            refreshToken: fresh.refreshToken,
-          );
-          notifyListeners();
-          return user;
-        } on AuthException {
-          await _storage.clear();
-          _accessToken = null;
-          _refreshToken = null;
-          _currentUser = null;
-          notifyListeners();
-          return null;
-        }
-      }
-      // Non-auth failure (e.g. offline): keep stored tokens for next launch.
-      return null;
+    } else if (_currentUser != null ||
+        _accessToken != null ||
+        _refreshToken != null) {
+      _currentUser = null;
+      _accessToken = null;
+      _refreshToken = null;
+      notifyListeners();
     }
+    return session?.user;
   }
 
   /// Clears tokens and user state.
   Future<void> logout() async {
-    await _storage.clear();
+    await _logout();
     _accessToken = null;
     _refreshToken = null;
     _currentUser = null;

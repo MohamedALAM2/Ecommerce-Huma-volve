@@ -4,15 +4,21 @@ import 'dart:io';
 
 import 'package:bloc_test/bloc_test.dart';
 import 'package:dio/dio.dart';
+import 'package:ecommerce_app_huma_volve/core/error/api_exception.dart';
+import 'package:ecommerce_app_huma_volve/core/error/app_failure.dart';
 import 'package:ecommerce_app_huma_volve/core/network/api_constants.dart';
 import 'package:ecommerce_app_huma_volve/features/home/cubit/home_cubit.dart';
 import 'package:ecommerce_app_huma_volve/features/home/cubit/home_state.dart';
-import 'package:ecommerce_app_huma_volve/features/home/data/catalog_exception.dart';
-import 'package:ecommerce_app_huma_volve/features/home/data/models/category_model.dart';
+import 'package:ecommerce_app_huma_volve/features/home/data/datasources/home_remote_data_source.dart';
 import 'package:ecommerce_app_huma_volve/features/home/data/models/product_model.dart';
-import 'package:ecommerce_app_huma_volve/features/home/data/repositories/home_repository.dart';
+import 'package:ecommerce_app_huma_volve/features/home/domain/entities/category_entity.dart';
+import 'package:ecommerce_app_huma_volve/features/home/domain/entities/product_entity.dart';
+import 'package:ecommerce_app_huma_volve/features/home/domain/repositories/home_repository.dart';
+import 'package:ecommerce_app_huma_volve/features/home/domain/usecases/get_categories_usecase.dart';
+import 'package:ecommerce_app_huma_volve/features/home/domain/usecases/get_products_usecase.dart';
 import 'package:ecommerce_app_huma_volve/features/home/screens/home_screen.dart';
 import 'package:ecommerce_app_huma_volve/features/home/widgets/category_chip.dart';
+import 'package:ecommerce_app_huma_volve/features/home/widgets/product_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -22,14 +28,14 @@ import 'package:http_mock_adapter/http_mock_adapter.dart';
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const tCatShoes = CategoryModel(id: 4, name: 'Shoes', image: 'shoes.jpg');
-const tCatElectronics = CategoryModel(
+const tCatShoes = CategoryEntity(id: 4, name: 'Shoes', image: 'shoes.jpg');
+const tCatElectronics = CategoryEntity(
   id: 2,
   name: 'Electronics',
   image: 'electronics.jpg',
 );
 
-const tShoe = ProductModel(
+const tShoe = ProductEntity(
   id: 35,
   title: 'Futuristic Holographic Soccer Cleats',
   price: 39,
@@ -38,7 +44,7 @@ const tShoe = ProductModel(
   category: tCatShoes,
 );
 
-const tHoodie = ProductModel(
+const tHoodie = ProductEntity(
   id: 2,
   title: 'Classic Red Pullover Hoodie',
   price: 10,
@@ -47,7 +53,7 @@ const tHoodie = ProductModel(
   category: null,
 );
 
-const tPhone = ProductModel(
+const tPhone = ProductEntity(
   id: 20,
   title: 'Sleek Smartphone',
   price: 299.99,
@@ -69,13 +75,12 @@ Map<String, dynamic> shoeJson() => {
 // Fakes
 // ---------------------------------------------------------------------------
 
-class FakeHomeRepository extends HomeRepository {
-  FakeHomeRepository() : super(Dio());
-
-  Future<List<CategoryModel>> Function()? categoriesHandler;
-  Future<List<ProductModel>> Function({
-    int limit,
-    int offset,
+/// Fake implementing the Domain repository contract (no Dio/HTTP).
+class FakeHomeRepository implements HomeRepository {
+  Future<List<CategoryEntity>> Function()? categoriesHandler;
+  Future<List<ProductEntity>> Function({
+    int? limit,
+    int? offset,
     int? categoryId,
     String? title,
   })?
@@ -84,36 +89,56 @@ class FakeHomeRepository extends HomeRepository {
   final List<Map<String, dynamic>> productCalls = [];
 
   @override
-  Future<List<CategoryModel>> getCategories() {
+  Future<List<CategoryEntity>> getCategories() {
     final handler = categoriesHandler;
     if (handler != null) return handler();
     return Future.value([]);
   }
 
   @override
-  Future<List<ProductModel>> getProducts({
-    int limit = ApiConstants.catalogPageSize,
-    int offset = 0,
+  Future<List<ProductEntity>> getProducts({
+    int? limit,
+    int? offset,
     int? categoryId,
     String? title,
   }) {
+    // Mirror the Data layer's page defaults so handler bodies observe the
+    // effective request (the use case forwards nulls untouched).
+    final effectiveLimit = limit ?? ApiConstants.catalogPageSize;
+    final effectiveOffset = offset ?? 0;
     productCalls.add({
-      'limit': limit,
-      'offset': offset,
+      'limit': effectiveLimit,
+      'offset': effectiveOffset,
       'categoryId': categoryId,
       'title': title,
     });
     final handler = productsHandler;
     if (handler != null) {
       return handler(
-        limit: limit,
-        offset: offset,
+        limit: effectiveLimit,
+        offset: effectiveOffset,
         categoryId: categoryId,
         title: title,
       );
     }
     return Future.value([]);
   }
+
+  @override
+  Future<ProductEntity> getProductById(int id) {
+    throw UnimplementedError(
+      'getProductById not stubbed in FakeHomeRepository',
+    );
+  }
+}
+
+/// Builds a cubit exactly like the DI container does: use cases over the
+/// given repository, no concrete Data dependencies in the test body.
+HomeCubit _makeCubit(FakeHomeRepository repo) {
+  return HomeCubit(
+    getProducts: GetProductsUseCase(repo),
+    getCategories: GetCategoriesUseCase(repo),
+  );
 }
 
 Dio _mockedDio(void Function(DioAdapter adapter) configure) {
@@ -264,7 +289,7 @@ void main() {
   // -------------------------------------------------------------------------
   // Repository
   // -------------------------------------------------------------------------
-  group('HomeRepository', () {
+  group('HomeRemoteDataSource', () {
     test('getProducts parses products with nested category', () async {
       final dio = _mockedDio(
         (a) => a.onGet(
@@ -272,10 +297,10 @@ void main() {
           (server) => server.reply(200, [shoeJson()]),
         ),
       );
-      final products = await HomeRepository(dio).getProducts();
+      final products = await HomeRemoteDataSource(dio).getProducts();
 
       expect(products, hasLength(1));
-      expect(products.first, tShoe);
+      expect(products.first.toEntity(), tShoe);
       // Junk image entries are dropped.
       expect(products.first.images, ['https://i.imgur.com/cleats.jpeg']);
     });
@@ -288,7 +313,7 @@ void main() {
         (server) => server.reply(200, []),
         queryParameters: {'limit': 10, 'offset': 0, 'categoryId': 4},
       );
-      final products = await HomeRepository(dio)
+      final products = await HomeRemoteDataSource(dio)
           .getProducts(limit: 10, offset: 0, categoryId: 4);
       expect(products, isEmpty);
     });
@@ -300,7 +325,8 @@ void main() {
         (server) => server.reply(200, []),
         queryParameters: {'limit': 10, 'offset': 0, 'title': 'hoodie'},
       );
-      final products = await HomeRepository(dio).getProducts(title: 'hoodie');
+      final products = await HomeRemoteDataSource(dio)
+          .getProducts(title: 'hoodie');
       expect(products, isEmpty);
     });
 
@@ -314,10 +340,10 @@ void main() {
           ]),
         ),
       );
-      final categories = await HomeRepository(dio).getCategories();
+      final categories = await HomeRemoteDataSource(dio).getCategories();
 
       expect(categories, hasLength(2));
-      expect(categories.first, tCatShoes);
+      expect(categories.first.toEntity(), tCatShoes);
       // Missing optional image defaults to ''.
       expect(categories[1].image, '');
     });
@@ -327,9 +353,9 @@ void main() {
         a.onGet(ApiConstants.products, (server) => server.reply(200, []));
         a.onGet(ApiConstants.categories, (server) => server.reply(200, []));
       });
-      final repo = HomeRepository(dio);
-      expect(await repo.getProducts(), isEmpty);
-      expect(await repo.getCategories(), isEmpty);
+      final remote = HomeRemoteDataSource(dio);
+      expect(await remote.getProducts(), isEmpty);
+      expect(await remote.getCategories(), isEmpty);
     });
 
     test('network failure and timeout map to friendly errors', () async {
@@ -340,9 +366,9 @@ void main() {
         ),
       );
       await expectLater(
-        () => HomeRepository(networkDio).getProducts(),
+        () => HomeRemoteDataSource(networkDio).getProducts(),
         throwsA(
-          isA<CatalogException>().having(
+          isA<ApiException>().having(
             (e) => e.message,
             'message',
             contains('No internet'),
@@ -363,9 +389,9 @@ void main() {
         ),
       );
       await expectLater(
-        () => HomeRepository(timeoutDio).getCategories(),
+        () => HomeRemoteDataSource(timeoutDio).getCategories(),
         throwsA(
-          isA<CatalogException>().having(
+          isA<ApiException>().having(
             (e) => e.message,
             'message',
             contains('timed out'),
@@ -382,9 +408,9 @@ void main() {
         ),
       );
       await expectLater(
-        () => HomeRepository(dio).getProducts(),
+        () => HomeRemoteDataSource(dio).getProducts(),
         throwsA(
-          isA<CatalogException>().having(
+          isA<ApiException>().having(
             (e) => e.message,
             'message',
             contains('Server error'),
@@ -400,7 +426,8 @@ void main() {
           (server) => server.reply(200, shoeJson()),
         ),
       );
-      expect(await HomeRepository(dio).getProductById(35), tShoe);
+      final product = await HomeRemoteDataSource(dio).getProductById(35);
+      expect(product.toEntity(), tShoe);
     });
   });
 
@@ -450,12 +477,7 @@ void main() {
       repo = FakeHomeRepository();
       repo.categoriesHandler = () async => [tCatShoes, tCatElectronics];
       repo.productsHandler =
-          ({
-            int limit = 10,
-            int offset = 0,
-            int? categoryId,
-            String? title,
-          }) async {
+          ({int? limit, int? offset, int? categoryId, String? title}) async {
             if (categoryId == 4) return [tShoe];
             if (categoryId == 2) return [tPhone];
             if (title == 'hoodie') return [tHoodie];
@@ -466,7 +488,7 @@ void main() {
 
     blocTest<HomeCubit, HomeState>(
       'loadHome emits loading then success with categories and products',
-      build: () => HomeCubit(repo),
+      build: () => _makeCubit(repo),
       act: (cubit) => cubit.loadHome(),
       expect: () => [
         const HomeState(status: HomeStatus.loading),
@@ -487,16 +509,11 @@ void main() {
       'loadHome emits failure when products fail',
       setUp: () {
         repo.productsHandler =
-            ({
-              int limit = 10,
-              int offset = 0,
-              int? categoryId,
-              String? title,
-            }) async {
-              throw const CatalogException('No internet connection.');
+            ({int? limit, int? offset, int? categoryId, String? title}) async {
+              throw const NetworkFailure('No internet connection.');
             };
       },
-      build: () => HomeCubit(repo),
+      build: () => _makeCubit(repo),
       act: (cubit) => cubit.loadHome(),
       expect: () => [
         const HomeState(status: HomeStatus.loading),
@@ -517,18 +534,13 @@ void main() {
       setUp: () {
         var calls = 0;
         repo.productsHandler =
-            ({
-              int limit = 10,
-              int offset = 0,
-              int? categoryId,
-              String? title,
-            }) async {
+            ({int? limit, int? offset, int? categoryId, String? title}) async {
               calls++;
-              if (calls == 1) throw const CatalogException('Down.');
+              if (calls == 1) throw const UnexpectedFailure('Down.');
               return [tShoe];
             };
       },
-      build: () => HomeCubit(repo),
+      build: () => _makeCubit(repo),
       act: (cubit) async {
         await cubit.loadHome();
         await cubit.retry();
@@ -559,7 +571,7 @@ void main() {
 
     blocTest<HomeCubit, HomeState>(
       'selectCategory filters by real category id and back to All',
-      build: () => HomeCubit(repo),
+      build: () => _makeCubit(repo),
       act: (cubit) async {
         await cubit.loadHome();
         await cubit.selectCategory(4);
@@ -609,7 +621,7 @@ void main() {
 
     blocTest<HomeCubit, HomeState>(
       'duplicate taps on the active category do not refetch',
-      build: () => HomeCubit(repo),
+      build: () => _makeCubit(repo),
       act: (cubit) async {
         await cubit.loadHome();
         final before = repo.productCalls.length;
@@ -633,15 +645,10 @@ void main() {
 
     blocTest<HomeCubit, HomeState>(
       'empty category emits the empty state',
-      build: () => HomeCubit(repo),
+      build: () => _makeCubit(repo),
       setUp: () {
         repo.productsHandler =
-            ({
-              int limit = 10,
-              int offset = 0,
-              int? categoryId,
-              String? title,
-            }) async {
+            ({int? limit, int? offset, int? categoryId, String? title}) async {
               if (categoryId == null) return [tShoe];
               return [];
             };
@@ -677,13 +684,13 @@ void main() {
     );
 
     test('rapid category switching drops the stale response', () async {
-      final slow = Completer<List<ProductModel>>();
+      final slow = Completer<List<ProductEntity>>();
       repo.productsHandler =
-          ({int limit = 10, int offset = 0, int? categoryId, String? title}) {
+          ({int? limit, int? offset, int? categoryId, String? title}) {
             if (categoryId == 4) return slow.future;
             return Future.value([tPhone]);
           };
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await cubit.loadHome();
 
       final pending = cubit.selectCategory(4);
@@ -701,7 +708,7 @@ void main() {
 
     blocTest<HomeCubit, HomeState>(
       'search is debounced and queries the backend',
-      build: () => HomeCubit(repo),
+      build: () => _makeCubit(repo),
       act: (cubit) async {
         await cubit.loadHome();
         cubit.onSearchChanged('h');
@@ -742,7 +749,7 @@ void main() {
 
     blocTest<HomeCubit, HomeState>(
       'category switch with pending search cancels the debounced query',
-      build: () => HomeCubit(repo),
+      build: () => _makeCubit(repo),
       act: (cubit) async {
         await cubit.loadHome();
         cubit.onSearchChanged('hoodie');
@@ -786,10 +793,10 @@ void main() {
       'categories failure keeps products visible with an explicit error',
       setUp: () {
         repo.categoriesHandler = () async {
-          throw const CatalogException('No cats.');
+          throw const UnexpectedFailure('No cats.');
         };
       },
-      build: () => HomeCubit(repo),
+      build: () => _makeCubit(repo),
       act: (cubit) => cubit.loadHome(),
       expect: () => [
         const HomeState(status: HomeStatus.loading),
@@ -810,10 +817,10 @@ void main() {
       'retryCategories reloads only the categories',
       setUp: () {
         repo.categoriesHandler = () async {
-          throw const CatalogException('No cats.');
+          throw const UnexpectedFailure('No cats.');
         };
       },
-      build: () => HomeCubit(repo),
+      build: () => _makeCubit(repo),
       act: (cubit) async {
         await cubit.loadHome();
         repo.categoriesHandler = () async => [tCatShoes];
@@ -849,9 +856,9 @@ void main() {
 
     test('repeated categories retry keeps the error gracefully', () async {
       repo.categoriesHandler = () async {
-        throw const CatalogException('No cats.');
+        throw const UnexpectedFailure('No cats.');
       };
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await cubit.loadHome();
       expect(cubit.state.categoriesErrorMessage, 'No cats.');
       expect(cubit.state.products, [tShoe, tHoodie]);
@@ -868,7 +875,7 @@ void main() {
       setUp: () {
         final page1 = List.generate(
           10,
-          (i) => ProductModel(
+          (i) => ProductEntity(
             id: i,
             title: 'Product $i',
             price: 10 + i.toDouble(),
@@ -876,7 +883,7 @@ void main() {
             images: const [],
           ),
         );
-        const last = ProductModel(
+        const last = ProductEntity(
           id: 99,
           title: 'Last one',
           price: 1,
@@ -885,17 +892,12 @@ void main() {
         );
         repo.categoriesHandler = () async => [];
         repo.productsHandler =
-            ({
-              int limit = 10,
-              int offset = 0,
-              int? categoryId,
-              String? title,
-            }) async {
+            ({int? limit, int? offset, int? categoryId, String? title}) async {
               if (offset == 0) return page1;
               return [last];
             };
       },
-      build: () => HomeCubit(repo),
+      build: () => _makeCubit(repo),
       act: (cubit) async {
         await cubit.loadHome();
         await cubit.loadMore();
@@ -908,7 +910,7 @@ void main() {
           status: HomeStatus.success,
           products: List.generate(
             10,
-            (i) => ProductModel(
+            (i) => ProductEntity(
               id: i,
               title: 'Product $i',
               price: 10 + i.toDouble(),
@@ -922,7 +924,7 @@ void main() {
           status: HomeStatus.success,
           products: List.generate(
             10,
-            (i) => ProductModel(
+            (i) => ProductEntity(
               id: i,
               title: 'Product $i',
               price: 10 + i.toDouble(),
@@ -938,7 +940,7 @@ void main() {
           products: [
             ...List.generate(
               10,
-              (i) => ProductModel(
+              (i) => ProductEntity(
                 id: i,
                 title: 'Product $i',
                 price: 10 + i.toDouble(),
@@ -946,7 +948,7 @@ void main() {
                 images: const [],
               ),
             ),
-            const ProductModel(
+            const ProductEntity(
               id: 99,
               title: 'Last one',
               price: 1,
@@ -963,16 +965,16 @@ void main() {
     );
 
     test('simultaneous loadMore calls fetch only once', () async {
-      final gate = Completer<List<ProductModel>>();
+      final gate = Completer<List<ProductEntity>>();
       var calls = 0;
       repo.productsHandler =
-          ({int limit = 10, int offset = 0, int? categoryId, String? title}) {
+          ({int? limit, int? offset, int? categoryId, String? title}) {
             calls++;
             if (offset == 0) {
               return Future.value(
                 List.generate(
                   10,
-                  (i) => ProductModel(
+                  (i) => ProductEntity(
                     id: i,
                     title: 'P$i',
                     price: 1,
@@ -984,7 +986,7 @@ void main() {
             }
             return gate.future;
           };
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await cubit.loadHome();
       calls = 0;
 
@@ -1000,16 +1002,11 @@ void main() {
     test('failed loadMore keeps products and allows explicit retry', () async {
       var page2Calls = 0;
       repo.productsHandler =
-          ({
-            int limit = 10,
-            int offset = 0,
-            int? categoryId,
-            String? title,
-          }) async {
+          ({int? limit, int? offset, int? categoryId, String? title}) async {
             if (offset == 0) {
               return List.generate(
                 10,
-                (i) => ProductModel(
+                (i) => ProductEntity(
                   id: i,
                   title: 'P$i',
                   price: 1,
@@ -1019,10 +1016,10 @@ void main() {
               );
             }
             page2Calls++;
-            if (page2Calls == 1) throw const CatalogException('Down.');
+            if (page2Calls == 1) throw const UnexpectedFailure('Down.');
             return [];
           };
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await cubit.loadHome();
       await cubit.loadMore();
 
@@ -1045,7 +1042,7 @@ void main() {
     });
 
     test('retryLoadMore is a no-op without a prior failure', () async {
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await cubit.loadHome();
       final calls = repo.productCalls.length;
       await cubit.retryLoadMore();
@@ -1054,9 +1051,9 @@ void main() {
     });
 
     test('retryLoadMore preserves offset and filters', () async {
-      List<ProductModel> pageOf(int start) => List.generate(
+      List<ProductEntity> pageOf(int start) => List.generate(
         10,
-        (i) => ProductModel(
+        (i) => ProductEntity(
           id: start + i,
           title: 'P${start + i}',
           price: 1,
@@ -1065,19 +1062,14 @@ void main() {
         ),
       );
       repo.productsHandler =
-          ({
-            int limit = 10,
-            int offset = 0,
-            int? categoryId,
-            String? title,
-          }) async {
+          ({int? limit, int? offset, int? categoryId, String? title}) async {
             if (categoryId == 4) {
               if (offset == 0) return pageOf(100);
-              throw const CatalogException('Down.');
+              throw const UnexpectedFailure('Down.');
             }
             return pageOf(0);
           };
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await cubit.loadHome();
       await cubit.selectCategory(4);
       expect(cubit.state.hasMore, isTrue);
@@ -1104,12 +1096,7 @@ void main() {
       repo = FakeHomeRepository();
       repo.categoriesHandler = () async => [tCatShoes, tCatElectronics];
       repo.productsHandler =
-          ({
-            int limit = 10,
-            int offset = 0,
-            int? categoryId,
-            String? title,
-          }) async {
+          ({int? limit, int? offset, int? categoryId, String? title}) async {
             if (categoryId == 4) return [tShoe];
             if (categoryId == 2) return [tPhone];
             if (title == 'hoodie') return [tHoodie];
@@ -1127,14 +1114,14 @@ void main() {
     _testHomeWidgets('shows loading then real products and categories', (
       tester,
     ) async {
-      final gate = Completer<List<ProductModel>>();
+      final gate = Completer<List<ProductEntity>>();
       repo.productsHandler = ({
-        int limit = 10,
-        int offset = 0,
+        int? limit,
+        int? offset,
         int? categoryId,
         String? title,
       }) => gate.future;
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await tester.pumpWidget(buildHome(cubit));
       await tester.pump();
 
@@ -1152,7 +1139,7 @@ void main() {
     });
 
     _testHomeWidgets('tapping a category filters the grid', (tester) async {
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await tester.pumpWidget(buildHome(cubit));
       await _pumpFrames(tester);
 
@@ -1177,17 +1164,12 @@ void main() {
     _testHomeWidgets('error state with retry recovers', (tester) async {
       var calls = 0;
       repo.productsHandler =
-          ({
-            int limit = 10,
-            int offset = 0,
-            int? categoryId,
-            String? title,
-          }) async {
+          ({int? limit, int? offset, int? categoryId, String? title}) async {
             calls++;
-            if (calls == 1) throw const CatalogException('No internet.');
+            if (calls == 1) throw const NetworkFailure('No internet.');
             return [tShoe];
           };
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await tester.pumpWidget(buildHome(cubit));
       await _pumpFrames(tester);
 
@@ -1205,16 +1187,11 @@ void main() {
       tester,
     ) async {
       repo.productsHandler =
-          ({
-            int limit = 10,
-            int offset = 0,
-            int? categoryId,
-            String? title,
-          }) async {
+          ({int? limit, int? offset, int? categoryId, String? title}) async {
             if (categoryId == null) return [tShoe];
             return [];
           };
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await tester.pumpWidget(buildHome(cubit));
       await tester.pumpAndSettle();
 
@@ -1228,7 +1205,7 @@ void main() {
     _testHomeWidgets('search filters and clearing restores the category', (
       tester,
     ) async {
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await tester.pumpWidget(buildHome(cubit));
       await _pumpFrames(tester);
 
@@ -1256,7 +1233,7 @@ void main() {
     _testHomeWidgets('switching category clears the visible search text', (
       tester,
     ) async {
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await tester.pumpWidget(buildHome(cubit));
       await _pumpFrames(tester);
 
@@ -1287,9 +1264,9 @@ void main() {
       'categories failure shows a retry banner without losing products',
       (tester) async {
         repo.categoriesHandler = () async {
-          throw const CatalogException('No cats.');
+          throw const UnexpectedFailure('No cats.');
         };
-        final cubit = HomeCubit(repo);
+        final cubit = _makeCubit(repo);
         await tester.pumpWidget(buildHome(cubit));
         await _pumpFrames(tester);
 
@@ -1321,7 +1298,7 @@ void main() {
       tester,
     ) async {
       var page2Calls = 0;
-      ProductModel pageItem(int id) => ProductModel(
+      ProductEntity pageItem(int id) => ProductEntity(
         id: id,
         title: 'P$id',
         price: 1,
@@ -1329,18 +1306,13 @@ void main() {
         images: const [],
       );
       repo.productsHandler =
-          ({
-            int limit = 10,
-            int offset = 0,
-            int? categoryId,
-            String? title,
-          }) async {
+          ({int? limit, int? offset, int? categoryId, String? title}) async {
             if (offset == 0) return List.generate(10, (i) => pageItem(i));
             page2Calls++;
-            if (page2Calls == 1) throw const CatalogException('Down.');
+            if (page2Calls == 1) throw const UnexpectedFailure('Down.');
             return [pageItem(99)];
           };
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await tester.pumpWidget(buildHome(cubit));
       await _pumpFrames(tester);
 
@@ -1365,7 +1337,7 @@ void main() {
     });
 
     _testHomeWidgets('tapping a product opens its details', (tester) async {
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await tester.pumpWidget(buildHome(cubit));
       await _pumpFrames(tester);
 
@@ -1402,15 +1374,10 @@ void main() {
           'An extremely long product title that spans multiple lines on '
           'narrow phone screens and must be ellipsized gracefully';
       repo.productsHandler =
-          ({
-            int limit = 10,
-            int offset = 0,
-            int? categoryId,
-            String? title,
-          }) async {
+          ({int? limit, int? offset, int? categoryId, String? title}) async {
             return List.generate(
               6,
-              (i) => ProductModel(
+              (i) => ProductEntity(
                 id: i,
                 title: '$longTitle $i',
                 price: 1234567.89,
@@ -1419,7 +1386,7 @@ void main() {
               ),
             );
           };
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await tester.pumpWidget(buildHome(cubit));
       await tester.pumpAndSettle();
 
@@ -1430,7 +1397,7 @@ void main() {
     _testHomeWidgets('rebuild keeps selection without refetching', (
       tester,
     ) async {
-      final cubit = HomeCubit(repo);
+      final cubit = _makeCubit(repo);
       await tester.pumpWidget(buildHome(cubit));
       await _pumpFrames(tester);
       await tester.tap(find.text('Shoes'));

@@ -1,13 +1,15 @@
-import 'package:ecommerce_app_huma_volve/core/dummy_data.dart' show Product;
 import 'package:flutter/foundation.dart' show listEquals;
 
+import '../../domain/entities/product_entity.dart' as domain;
 import 'category_model.dart';
 
-/// Product as returned by `GET /products` (and `GET /products/{id}`).
+/// Product DTO as returned by `GET /products` (and `GET /products/{id}`).
 ///
-/// The API uses `title` while the legacy UI model uses `name`; the mapping
-/// happens in [toProduct]. The backend provides no colors/sizes/stock, so
-/// those are intentionally left empty instead of inventing data.
+/// JSON decoding lives here; the Domain layer works with
+/// [domain.ProductEntity]. The API uses `title` while the legacy UI model
+/// uses `name`; that mapping happens in Presentation (see `ProductCard`).
+/// The backend provides no colors/sizes/stock, so those are intentionally
+/// left empty instead of inventing data.
 class ProductModel {
   final int id;
   final String title;
@@ -91,19 +93,15 @@ class ProductModel {
     category,
   );
 
-  /// Compatibility adapter for [ProductDetailsScreen] and the Cart, which
-  /// still operate on the legacy [Product] type. Variants are empty because
-  /// the backend does not provide them; the details screen hides the
-  /// color/size selectors when they are empty.
-  Product toProduct() {
-    return Product(
-      id: '$id',
-      name: title,
-      description: description,
+  /// Maps this DTO to the domain entity at the Data/Domain boundary.
+  domain.ProductEntity toEntity() {
+    return domain.ProductEntity(
+      id: id,
+      title: title,
       price: price,
-      imageUrl: primaryImage,
-      colors: const [],
-      sizes: const [],
+      description: description,
+      images: List<String>.unmodifiable(images),
+      category: category?.toEntity(),
     );
   }
 

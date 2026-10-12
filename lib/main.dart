@@ -1,19 +1,17 @@
 import 'package:flutter/material.dart';
 
-import 'core/network/dio_client.dart';
+import 'core/di/app_dependencies.dart';
+import 'core/di/app_scope.dart';
 import 'core/theme.dart';
-import 'features/auth/data/services/auth_service.dart';
-import 'features/auth/data/services/auth_storage.dart';
-import 'features/auth/session/auth_session.dart';
 import 'features/splash/screens/splash_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  AuthSession.init(
-    authService: AuthService(dio: DioClient.create()),
-    storage: SecureAuthStorage(),
-  );
-  runApp(const MyApp());
+  // Composition root: single shared Dio, repository implementations behind
+  // domain contracts, use cases, and the AuthSession singleton.
+  final dependencies = AppDependencies();
+  dependencies.initAuthSession();
+  runApp(AppScope(dependencies: dependencies, child: const MyApp()));
 }
 
 class MyApp extends StatelessWidget {

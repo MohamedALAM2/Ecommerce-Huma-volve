@@ -1,4 +1,6 @@
-/// Category as returned by `GET /categories`.
+import '../../domain/entities/category_entity.dart' as domain;
+
+/// Category DTO as returned by `GET /categories`.
 class CategoryModel {
   final int id;
   final String name;
@@ -20,6 +22,11 @@ class CategoryModel {
 
   Map<String, dynamic> toJson() {
     return {'id': id, 'name': name, 'image': image};
+  }
+
+  /// Maps this DTO to the domain entity at the Data/Domain boundary.
+  domain.CategoryEntity toEntity() {
+    return domain.CategoryEntity(id: id, name: name, image: image);
   }
 
   @override

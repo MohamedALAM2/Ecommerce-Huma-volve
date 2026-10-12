@@ -1,19 +1,18 @@
-import 'dart:async';
-import 'dart:io';
-
 import 'package:dio/dio.dart';
 
+import '../../../../core/error/api_exception.dart';
+import '../../../../core/error/dio_error_parser.dart';
 import '../../../../core/network/api_constants.dart';
-import '../catalog_exception.dart';
 import '../models/category_model.dart';
 import '../models/product_model.dart';
 
-/// Read-only catalog access. All HTTP lives here — widgets and the Cubit
-/// never touch Dio directly.
-class HomeRepository {
+/// Catalog HTTP calls. Returns DTOs, never domain entities, and throws
+/// [ApiException] (never raw `DioException`). Repository implementations
+/// translate these into typed domain failures.
+class HomeRemoteDataSource {
   final Dio _dio;
 
-  HomeRepository(this._dio);
+  HomeRemoteDataSource(this._dio);
 
   /// `GET /categories`.
   Future<List<CategoryModel>> getCategories() async {
@@ -68,43 +67,35 @@ class HomeRepository {
       );
       final data = response.data;
       if (data == null) {
-        throw const CatalogException('Product not found.', statusCode: 404);
+        throw const ApiException.response(404, 'Product not found.');
       }
       return ProductModel.fromJson(Map<String, dynamic>.from(data));
     } on DioException catch (e) {
       throw _mapError(e, fallback: 'Could not load product details.');
-    } on CatalogException {
+    } on ApiException {
       rethrow;
     }
   }
 
-  CatalogException _mapError(DioException e, {required String fallback}) {
-    if (e.type == DioExceptionType.connectionTimeout ||
-        e.type == DioExceptionType.sendTimeout ||
-        e.type == DioExceptionType.receiveTimeout ||
-        e is TimeoutException) {
-      return const CatalogException(
+  ApiException _mapError(DioException e, {required String fallback}) {
+    if (isTimeoutError(e)) {
+      return const ApiException.timeout(
         'Connection timed out. Please check your internet and try again.',
       );
     }
-    if (e.type == DioExceptionType.connectionError ||
-        e.type == DioExceptionType.unknown ||
-        e.error is SocketException) {
-      return const CatalogException(
+    if (isNetworkError(e)) {
+      return const ApiException.network(
         'No internet connection. Please check your network and try again.',
       );
     }
-    final status = e.response?.statusCode;
+    final status = dioStatusCode(e);
     if (status != null && status >= 500) {
-      return const CatalogException('Server error. Please try again later.');
+      return ApiException.response(
+        status,
+        'Server error. Please try again later.',
+      );
     }
-    final data = e.response?.data;
-    String? backend;
-    if (data is Map && data['message'] is String) {
-      backend = data['message'] as String;
-    } else if (data is Map && data['message'] is List) {
-      backend = (data['message'] as List).join('\n');
-    }
-    return CatalogException(backend ?? fallback, statusCode: status);
+    final backend = dioBackendMessage(e);
+    return ApiException.response(status, backend ?? fallback);
   }
 }

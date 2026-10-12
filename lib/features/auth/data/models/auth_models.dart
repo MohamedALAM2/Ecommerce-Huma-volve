@@ -1,4 +1,6 @@
-/// Tokens returned by `POST /auth/login` and `POST /auth/refresh-token`.
+import '../../domain/entities/auth_tokens_entity.dart';
+
+/// Tokens (DTO) returned by `POST /auth/login` and `POST /auth/refresh-token`.
 class AuthTokens {
   final String accessToken;
   final String refreshToken;
@@ -18,6 +20,14 @@ class AuthTokens {
 
   Map<String, dynamic> toJson() {
     return {'access_token': accessToken, 'refresh_token': refreshToken};
+  }
+
+  /// Maps this DTO to the domain entity at the Data/Domain boundary.
+  AuthTokensEntity toEntity() {
+    return AuthTokensEntity(
+      accessToken: accessToken,
+      refreshToken: refreshToken,
+    );
   }
 }
 
