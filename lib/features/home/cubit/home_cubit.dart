@@ -8,6 +8,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../../core/error/app_failure.dart';
 import '../../../../core/network/api_constants.dart';
 import '../domain/entities/category_entity.dart';
+import '../domain/entities/product_entity.dart' as domain;
 import '../domain/usecases/get_categories_usecase.dart';
 import '../domain/usecases/get_products_usecase.dart';
 import 'home_state.dart';
@@ -30,6 +31,14 @@ class HomeCubit extends Cubit<HomeState> {
 
   int _requestId = 0;
 
+  /// Raw number of products fetched from the backend for the current filter.
+  ///
+  /// Pagination offsets must count what the backend has already skipped —
+  /// not the deduplicated UI list. When a page repeats IDs (mutable backend
+  /// data), the UI filters duplicates but [_loadedCount] still advances by
+  /// the raw page length, so the next offset never re-requests the same page.
+  int _loadedCount = 0;
+
   static const searchDebounce = Duration(milliseconds: 400);
 
   HomeCubit({
@@ -49,6 +58,7 @@ class HomeCubit extends Cubit<HomeState> {
   Future<void> loadHome() async {
     _searchDebounce?.cancel();
     final requestId = ++_requestId;
+    _loadedCount = 0;
     emit(
       state.copyWith(
         status: HomeStatus.loading,
@@ -78,14 +88,19 @@ class HomeCubit extends Cubit<HomeState> {
       ),
     );
     try {
-      final products = await _getProducts(limit: ApiConstants.catalogPageSize);
+      final products = await _getProducts(
+        limit: ApiConstants.catalogPageSize,
+        offset: 0,
+      );
       if (requestId != _requestId || isClosed) return;
+      _loadedCount = products.length;
+      final unique = _deduplicate(products);
       emit(
         state.copyWith(
-          status: products.isEmpty ? HomeStatus.empty : HomeStatus.success,
+          status: unique.isEmpty ? HomeStatus.empty : HomeStatus.success,
           categories: categories,
           selectedCategoryId: () => null,
-          products: products,
+          products: unique,
           hasMore: products.length == ApiConstants.catalogPageSize,
         ),
       );
@@ -133,6 +148,7 @@ class HomeCubit extends Cubit<HomeState> {
     }
     _searchDebounce?.cancel();
     final requestId = ++_requestId;
+    _loadedCount = 0;
     emit(
       state.copyWith(
         status: HomeStatus.loading,
@@ -156,6 +172,7 @@ class HomeCubit extends Cubit<HomeState> {
 
   Future<void> _search(String query) async {
     final requestId = ++_requestId;
+    _loadedCount = 0;
     emit(
       state.copyWith(
         status: HomeStatus.loading,
@@ -176,6 +193,7 @@ class HomeCubit extends Cubit<HomeState> {
     // manual retry always wins over pending input.
     _searchDebounce?.cancel();
     final requestId = ++_requestId;
+    _loadedCount = 0;
     emit(
       state.copyWith(
         status: HomeStatus.loading,
@@ -196,14 +214,17 @@ class HomeCubit extends Cubit<HomeState> {
     try {
       final products = await _getProducts(
         limit: ApiConstants.catalogPageSize,
+        offset: 0,
         categoryId: categoryId,
         title: query.isEmpty ? null : query,
       );
       if (requestId != _requestId || isClosed) return;
+      _loadedCount = products.length;
+      final unique = _deduplicate(products);
       emit(
         state.copyWith(
-          status: products.isEmpty ? HomeStatus.empty : HomeStatus.success,
-          products: products,
+          status: unique.isEmpty ? HomeStatus.empty : HomeStatus.success,
+          products: unique,
           hasMore: products.length == ApiConstants.catalogPageSize,
         ),
       );
@@ -242,7 +263,9 @@ class HomeCubit extends Cubit<HomeState> {
     final requestId = _requestId;
     final categoryId = state.selectedCategoryId;
     final query = state.searchQuery;
-    final offset = state.products.length;
+    // Offset counts raw backend items (see [_loadedCount]), never the
+    // deduplicated UI list, so repeated IDs cannot cause repeated pages.
+    final offset = _loadedCount;
     emit(state.copyWith(isLoadingMore: true, loadMoreError: false));
     try {
       final more = await _getProducts(
@@ -256,9 +279,10 @@ class HomeCubit extends Cubit<HomeState> {
           query != state.searchQuery) {
         return;
       }
+      _loadedCount += more.length;
       emit(
         state.copyWith(
-          products: [...state.products, ...more],
+          products: _appendUnique(state.products, more),
           isLoadingMore: false,
           hasMore: more.length == ApiConstants.catalogPageSize,
         ),
@@ -273,5 +297,30 @@ class HomeCubit extends Cubit<HomeState> {
   Future<void> close() {
     _searchDebounce?.cancel();
     return super.close();
+  }
+
+  /// Removes repeated product IDs while preserving order. Used for the
+  /// first page, where the whole list comes from a single response.
+  List<domain.ProductEntity> _deduplicate(List<domain.ProductEntity> items) {
+    final seen = <int>{};
+    final unique = <domain.ProductEntity>[];
+    for (final item in items) {
+      if (seen.add(item.id)) unique.add(item);
+    }
+    return unique;
+  }
+
+  /// Appends only products whose IDs are not already visible.
+  List<domain.ProductEntity> _appendUnique(
+    List<domain.ProductEntity> current,
+    List<domain.ProductEntity> incoming,
+  ) {
+    if (incoming.isEmpty) return current;
+    final seen = <int>{for (final item in current) item.id};
+    final result = [...current];
+    for (final item in incoming) {
+      if (seen.add(item.id)) result.add(item);
+    }
+    return result;
   }
 }

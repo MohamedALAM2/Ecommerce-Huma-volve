@@ -23,8 +23,17 @@ class AppNetworkImage extends StatelessWidget {
     this.borderRadius,
   });
 
-  bool get _hasUrl =>
-      imageUrl.trim().isNotEmpty && Uri.tryParse(imageUrl)?.hasScheme == true;
+  bool get _hasUrl {
+    final trimmed = imageUrl.trim();
+    if (trimmed.isEmpty) return false;
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null) return false;
+    // Match ProductImageNormalizer: only http(s) with a host is attempted.
+    // Anything else (empty, ftp/data, host-less) shows the local placeholder.
+    if (uri.scheme != 'http' && uri.scheme != 'https') return false;
+    if (uri.host.isEmpty) return false;
+    return true;
+  }
 
   @override
   Widget build(BuildContext context) {

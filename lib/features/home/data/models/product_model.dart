@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show listEquals;
 
 import '../../domain/entities/product_entity.dart' as domain;
 import 'category_model.dart';
+import 'product_image_normalizer.dart';
 
 /// Product DTO as returned by `GET /products` (and `GET /products/{id}`).
 ///
@@ -31,17 +32,11 @@ class ProductModel {
   String get primaryImage => images.isEmpty ? '' : images.first;
 
   factory ProductModel.fromJson(Map<String, dynamic> json) {
-    final rawImages = json['images'];
-    final images = <String>[];
-    if (rawImages is List) {
-      for (final item in rawImages) {
-        final url = item.toString().trim();
-        // Drop empty entries and non-URL junk like "[\"...\"]" leftovers.
-        if (url.isNotEmpty && url.startsWith('http')) {
-          images.add(url);
-        }
-      }
-    }
+    // Raw `images` may be a list, a single JSON-encoded string, or garbage.
+    // Normalization extracts usable http(s) URLs and drops the rest without
+    // throwing, so every product page (initial, paginated, filtered,
+    // searched, details) shares the same safe parsing.
+    final images = ProductImageNormalizer.normalize(json['images']);
 
     CategoryModel? category;
     if (json['category'] is Map) {
