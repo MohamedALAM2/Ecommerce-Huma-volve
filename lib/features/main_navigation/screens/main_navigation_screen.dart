@@ -35,6 +35,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     // Resolved from the composition root: Presentation no longer depends on
     // concrete Data implementations (Dio/repository construction).
     _homeCubit = AppScope.read(context).createHomeCubit();
+    // Cold-start / post-login deep links land here: after this screen is
+    // laid out, open the pending product (if any) on top of it, so the
+    // back stack is always [Main, Details] — never Login/Splash beneath.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      AppScope.read(context).deepLinkCoordinator.openPendingIfAny();
+    });
   }
 
   @override

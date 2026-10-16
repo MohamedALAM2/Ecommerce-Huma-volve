@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/di/app_scope.dart';
 import '../../../core/dummy_data.dart';
 import '../../../core/theme.dart';
 import '../widgets/profile_menu_item.dart';
@@ -20,6 +21,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (_isLoggingOut) return;
     setState(() => _isLoggingOut = true);
     await AuthSession.instance.logout();
+    // A pending deep-link callback must never reopen authenticated
+    // screens after logout. Nullable lookup: standalone tests may pump
+    // Profile without an AppScope.
+    if (mounted) {
+      AppScope.maybeRead(context)?.deepLinkCoordinator.clearForLogout();
+    }
     if (!mounted) return;
     Navigator.pushReplacement(
       context,

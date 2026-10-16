@@ -15,7 +15,9 @@ import '../../features/home/data/datasources/home_remote_data_source.dart';
 import '../../features/home/data/repositories/home_repository_impl.dart';
 import '../../features/home/domain/repositories/home_repository.dart';
 import '../../features/home/domain/usecases/get_categories_usecase.dart';
+import '../../features/home/domain/usecases/get_product_details_usecase.dart';
 import '../../features/home/domain/usecases/get_products_usecase.dart';
+import '../deep_links/deep_link_coordinator.dart';
 import '../network/dio_client.dart';
 
 /// Application composition root: builds the object graph once, in one
@@ -30,6 +32,7 @@ class AppDependencies {
   AuthLocalDataSource? _authLocal;
   AuthRepository? _authRepository;
   HomeRepository? _homeRepository;
+  DeepLinkCoordinator? _deepLinks;
 
   /// Shared HTTP client for the whole app.
   Dio get dio => _dio ??= DioClient.create();
@@ -72,6 +75,17 @@ class AppDependencies {
       GetProductsUseCase(homeRepository);
   GetCategoriesUseCase createGetCategoriesUseCase() =>
       GetCategoriesUseCase(homeRepository);
+  GetProductDetailsUseCase createGetProductDetailsUseCase() =>
+      GetProductDetailsUseCase(homeRepository);
+
+  /// Central deep-link coordinator (single instance per composition root).
+  /// The navigator key is attached by `MyApp` once its [Navigator] exists;
+  /// authentication is read live from the [AuthSession] singleton so
+  /// logged-out links stay pending instead of navigating.
+  DeepLinkCoordinator get deepLinkCoordinator =>
+      _deepLinks ??= DeepLinkCoordinator(
+        isAuthenticated: () => AuthSession.instance.isAuthenticated,
+      );
 
   /// Fresh [HomeCubit] per owner (e.g. MainNavigationScreen), sharing the
   /// app-wide [Dio]. The owner must close it.

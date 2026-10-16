@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/di/app_scope.dart';
 import '../../../core/theme.dart';
 import '../../auth/domain/entities/user_entity.dart';
 import '../../auth/domain/usecases/restore_session_usecase.dart'
@@ -39,14 +40,21 @@ class _SplashScreenState extends State<SplashScreen> {
     if (!mounted) return;
     if (user != null) {
       _go(const MainNavigationScreen());
-      return;
-    }
-    if (AuthSession.instance.lastRestoreOutcome ==
+    } else if (AuthSession.instance.lastRestoreOutcome ==
         RestoreOutcome.temporaryFailure) {
       setState(() => _showRetry = true);
       return;
+    } else {
+      _go(const LoginScreen());
     }
-    _go(const LoginScreen());
+    // Splash navigation is done: pending deep links (if any) may now be
+    // consumed by MainNavigationScreen's post-frame check. Marking happens
+    // after _go so a pending details route can never be replaced by
+    // Splash's own pushReplacement. Nullable lookup: standalone tests may
+    // pump Splash without an AppScope.
+    if (mounted) {
+      AppScope.maybeRead(context)?.deepLinkCoordinator.markSplashResolved();
+    }
   }
 
   void _go(Widget destination) {

@@ -25,6 +25,13 @@ class AppScope extends InheritedWidget {
     return scope!.dependencies;
   }
 
+  /// Nullable lookup for optional integrations (e.g. Splash marking
+  /// deep-link readiness in tests that pump screens standalone).
+  static AppDependencies? maybeRead(BuildContext context) {
+    final scope = context.getInheritedWidgetOfExactType<AppScope>();
+    return scope?.dependencies;
+  }
+
   @override
   bool updateShouldNotify(AppScope oldWidget) =>
       oldWidget.dependencies != dependencies;
